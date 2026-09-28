@@ -1,10 +1,9 @@
 [theme]
-
 base = "light"
-primaryColor = "#D97757"             # Claude clay — accent (sliders, highlights)
-backgroundColor = "#E5DECD"          # warm cream — page background
-secondaryBackgroundColor = "#EAE6DC" # soft sand — sidebar / cards
-textColor = "#2B2A27"                # warm dark ink — body text
+primaryColor = "#2E5F7E"
+backgroundColor = "#F3F1EA"
+secondaryBackgroundColor = "#E8E4D9"
+textColor = "#23211D"
 font = "sans serif"
 
 [server]
