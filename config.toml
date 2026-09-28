@@ -3,7 +3,7 @@
 # recolour the whole app — no code changes needed.
 base = "light"                       # "light" or "dark" starting point
 primaryColor = "#0F766E"             # accent: sliders, highlights, links
-backgroundColor = "#E34424"          # main page background
+backgroundColor = "#D624E3"          # main page background
 secondaryBackgroundColor = "#EEF3F4" # sidebar / cards / table header
 textColor = "#14262B"                # body text
 font = "sans serif"
