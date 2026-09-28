@@ -226,18 +226,23 @@ def render(controls: dict, feed: dict) -> None:
     st.subheader("Key performance indicators")
     _kpi_row(r)
 
+    st.divider()
     st.subheader("Where these numbers come from")
     _equations_and_sources(r)
 
-    st.subheader("Performance maps — model vs manufacturer reference")
-    st.caption("Steel-blue line = Danfoss reference. Amber circle = model point. "
-               "Purple diamond = your measured reading. Shaded bands = outside the "
-               "Danfoss range. On the plant, the gap from the line flags wear or lost "
-               "efficiency.")
+    st.divider()
+    st.subheader("Performance curves — pump vs Danfoss reference")
     measured = _measured_inputs()
+    st.markdown(
+        "**Legend** — :blue[━ line] Danfoss reference  ·  :orange[● amber] model "
+        "point  ·  :violet[◆ purple] your measured reading  ·  shaded = outside "
+        "the Danfoss range"
+    )
     left, right = st.columns(2)
     left.altair_chart(_curve_flow(r, measured), theme=None, width='stretch')
     right.altair_chart(_curve_power(r, measured), theme=None, width='stretch')
+    st.caption("The gap between a point and the line is the wear / lost-efficiency signal.")
 
+    st.divider()
     _interpretation(r, measured)
     _assumptions()
