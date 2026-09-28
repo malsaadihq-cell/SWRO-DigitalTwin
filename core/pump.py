@@ -1,54 +1,77 @@
 """Pump block — Danfoss APP 11 / 1500 (code 180B3211).
 
 Design rule for this file: nothing is a bare number. Every characteristic
-carries the exact place in the Danfoss manual it came from, and every law
-is a named function whose docstring quotes the source. That way the app
-can show — next to each result — "this number came from here, using this
-equation", which is exactly what the examiner asks for.
+carries what it means and the exact manual page it comes from, and every
+law is a named function whose docstring cites its source. That way the
+app can show, next to each result, "this number means X, it came from
+page Y, and it was used in this equation" — which is what the examiner
+asks for.
 
-Pump identity is confirmed: the manual's Technical-data table lists
-code 180B3211 as APP 11 / 1500, and that same code number is on the
-plant nameplate (your Figure/photo). So we use that variant's numbers.
+Pump identity is confirmed: the manual's Technical-data table (p. 24)
+lists code 180B3211 as APP 11 / 1500, and that same code is on the plant
+nameplate. So we use that variant's numbers.
 
-Sources used below:
-  DS§3  — Data sheet, section 3 "Technical data" (per-variant table)
-  DS§5  — Data sheet, section 5 "Flow at different rpm" (flow law)
-  DS§7  — Data sheet, section 7 "Power requirements" (power equation)
-  CH4   — Project Chapter 4 (VFD frequency <-> speed mapping)
+Manual = "2 HPP O&M Manual APP 11-13 Pumps" (Danfoss). Page numbers below
+are the PDF page numbers of that file.
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
 
-DS3 = "Danfoss APP 11-13 data sheet, §3 Technical data (code 180B3211)"
-DS5 = "Danfoss APP 11-13 data sheet, §5 Flow at different rpm"
-DS7 = "Danfoss APP 11-13 data sheet, §7 Power requirements (APP 11/1500)"
-CH4 = "Project Chapter 4 (50 Hz ↔ 1500 rpm)"
+# Sources, with page numbers in the Danfoss manual
+P24 = "Danfoss APP 11-13 manual, p. 24 — Technical data table (code 180B3211)"
+P25 = "Danfoss APP 11-13 manual, p. 25 — Flow at different rpm"
+P26 = "Danfoss APP 11-13 manual, p. 26 — Power requirements (APP 11/1500)"
+CH4 = "Project Chapter 4 — instrument survey (50 Hz corresponds to 1500 rpm)"
 
 
 # ---------------------------------------------------------------------
-# A characteristic = value + unit + where it comes from
+# A characteristic = value + unit + what it means + where it comes from
 # ---------------------------------------------------------------------
 @dataclass(frozen=True)
 class Spec:
     value: float
     unit: str
+    what: str      # plain-language meaning, for the examiner
     source: str
 
 
 CHARACTERISTICS: dict[str, Spec] = {
-    "displacement": Spec(137.0, "cm³/rev", DS3),
-    "rated_flow":   Spec(11.1, "m³/h", DS3 + " — rated flow at 1500 rpm, 60 bar"),
-    "rated_rpm":    Spec(1500.0, "rpm", DS3),
-    "min_rpm":      Spec(700.0, "rpm", DS3),
-    "outlet_min":   Spec(30.0, "bar", DS3),
-    "outlet_max":   Spec(70.0, "bar", DS3),
-    "inlet_min":    Spec(2.0, "bar", DS3),
-    "inlet_max":    Spec(5.0, "bar", DS3),
-    "power_ref":    Spec(24.0, "kW", DS3 + " — power at 1500 rpm, 60 bar"),
-    "calc_factor":  Spec(475.0, "—", DS7),
-    "hz_to_rpm":    Spec(30.0, "rpm/Hz", CH4),
+    "displacement": Spec(
+        137.0, "cm³/rev",
+        "Fluid volume the pump pushes per shaft revolution", P24),
+    "rated_flow": Spec(
+        11.1, "m³/h",
+        "Delivered flow at max speed (1500 rpm) and 60 bar", P24),
+    "rated_rpm": Spec(
+        1500.0, "rpm",
+        "Maximum continuous shaft speed", P24),
+    "min_rpm": Spec(
+        700.0, "rpm",
+        "Minimum continuous shaft speed", P24),
+    "outlet_min": Spec(
+        30.0, "bar",
+        "Lowest allowed discharge pressure", P24),
+    "outlet_max": Spec(
+        70.0, "bar",
+        "Highest allowed discharge pressure (continuous)", P24),
+    "inlet_min": Spec(
+        2.0, "bar",
+        "Lowest allowed suction pressure — below it, cavitation risk", P24),
+    "inlet_max": Spec(
+        5.0, "bar",
+        "Highest allowed suction pressure (continuous)", P24),
+    "power_ref": Spec(
+        24.0, "kW",
+        "Manufacturer shaft power at 1500 rpm & 60 bar — a check point", P24),
+    "calc_factor": Spec(
+        475.0, "—",
+        "Constant in the Danfoss power equation; bundles pump efficiency, "
+        "specific to this pump variant", P26),
+    "hz_to_rpm": Spec(
+        30.0, "rpm/Hz",
+        "Converts VFD frequency to shaft speed for this motor", CH4),
 }
 
 
@@ -61,11 +84,11 @@ def v(key: str) -> float:
 
 
 # ---------------------------------------------------------------------
-# The laws. Each returns the number AND the worked string, so the UI can
-# show "11.1 × 1440/1500 = 10.66", not just the answer.
+# The laws. Each returns the number; simulate() also builds the worked
+# string so the UI can show "11.1 × 1440/1500 = 10.66", not just the answer.
 # ---------------------------------------------------------------------
 def rpm_from_frequency(hz: float) -> float:
-    """Speed from VFD frequency. Fixed ratio (CH4): rpm = hz × 30."""
+    """Speed from VFD frequency. Fixed ratio (Chapter 4): rpm = hz × 30."""
     return hz * v("hz_to_rpm")
 
 
@@ -80,23 +103,23 @@ def theoretical_flow(rpm: float) -> float:
 
 
 def nominal_flow(rpm: float) -> float:
-    """Delivered flow, manufacturer flow-vs-rpm law (DS§5):
+    """Delivered flow, manufacturer flow-vs-rpm law (manual p. 25):
 
         "The flow/rpm ratio is constant"  ->  Q = Q_rated × rpm / rpm_rated
 
-    This is the straight reference line on the DS§5 chart; it already
+    This is the straight reference line on the p. 25 chart; it already
     includes the pump's nominal slip at rated conditions.
     """
     return v("rated_flow") * rpm / v("rated_rpm")
 
 
 def shaft_power(flow_m3h: float, outlet_bar: float) -> float:
-    """Absorbed power, Danfoss equation (DS§7):
+    """Absorbed power, Danfoss equation (manual p. 26):
 
         P [kW] = 16.7 × Q [m³/h] × p_out [bar] / calc_factor
 
     calc_factor = 475 for APP 11/1500 bundles the pump efficiency.
-    (Checks out: 16.7 × 11.4 × 60 / 475 = 24 kW, matching the DS table.)
+    (Checks out: 16.7 × 11.4 × 60 / 475 = 24 kW, matching the p. 24 table.)
     """
     return 16.7 * flow_m3h * outlet_bar / v("calc_factor")
 
@@ -122,8 +145,7 @@ class PumpResult:
 
     kpis: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
-    # human-readable worked substitutions (LaTeX bodies, no $$)
-    worked: dict = field(default_factory=dict)
+    worked: dict = field(default_factory=dict)   # LaTeX bodies, no $$
 
 
 def simulate(frequency_hz: float, outlet_pressure: float,
@@ -172,13 +194,13 @@ def _check_limits(rpm: float, outlet: float, inlet: float) -> list[str]:
     w = []
     if rpm < v("min_rpm") or rpm > v("rated_rpm"):
         w.append(f"speed {rpm:.0f} rpm is outside the "
-                 f"{v('min_rpm'):.0f}–{v('rated_rpm'):.0f} rpm range ({DS3})")
+                 f"{v('min_rpm'):.0f}–{v('rated_rpm'):.0f} rpm range (manual p. 24)")
     if outlet < v("outlet_min") or outlet > v("outlet_max"):
         w.append(f"outlet pressure {outlet:.1f} bar is outside the "
-                 f"{v('outlet_min'):.0f}–{v('outlet_max'):.0f} bar range ({DS3})")
+                 f"{v('outlet_min'):.0f}–{v('outlet_max'):.0f} bar range (manual p. 24)")
     if inlet < v("inlet_min"):
         w.append(f"inlet pressure {inlet:.1f} bar is below the "
-                 f"{v('inlet_min'):.0f} bar minimum — cavitation risk ({DS3})")
+                 f"{v('inlet_min'):.0f} bar minimum — cavitation risk (manual p. 24)")
     return w
 
 
@@ -186,7 +208,7 @@ def _check_limits(rpm: float, outlet: float, inlet: float) -> list[str]:
 # Reference curves for plotting (manufacturer lines to compare against)
 # ---------------------------------------------------------------------
 def flow_reference(points: int = 33) -> list[tuple[float, float]]:
-    """Manufacturer flow line (DS§5): (rpm, nominal flow) over the range."""
+    """Manufacturer flow line (p. 25): (rpm, nominal flow) over the range."""
     lo, hi = v("min_rpm"), v("rated_rpm")
     return [(lo + (hi - lo) * i / (points - 1),
              nominal_flow(lo + (hi - lo) * i / (points - 1)))
@@ -194,7 +216,7 @@ def flow_reference(points: int = 33) -> list[tuple[float, float]]:
 
 
 def power_reference(flow_m3h: float, points: int = 33) -> list[tuple[float, float]]:
-    """Power line (DS§7) at a fixed flow: (outlet pressure, shaft power)."""
+    """Power line (p. 26) at a fixed flow: (outlet pressure, shaft power)."""
     lo, hi = v("outlet_min"), v("outlet_max")
     return [(lo + (hi - lo) * i / (points - 1),
              shaft_power(flow_m3h, lo + (hi - lo) * i / (points - 1)))
