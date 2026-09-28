@@ -205,6 +205,81 @@ def _check_limits(rpm: float, outlet: float, inlet: float) -> list[str]:
 
 
 # ---------------------------------------------------------------------
+# Interpretation — reads the operating point and says what it means.
+# Levels: "ok" (on spec), "info" (neutral / measurement note), "warn"
+# (a real degradation signature). No data is invented; measured values
+# come only from what the user typed.
+# ---------------------------------------------------------------------
+FLOW_TOL = 3.0   # % band around the flow reference counted as "on spec"
+POWER_TOL = 5.0  # % band around the power reference counted as "on spec"
+
+
+def interpret(r: PumpResult, measured: dict | None = None) -> list[tuple[str, str]]:
+    msgs: list[tuple[str, str]] = []
+
+    # --- what the model point itself means -----------------------------
+    if r.health_factor < 0.999:
+        gap = (1.0 - r.health_factor) * 100.0
+        msgs.append(("info",
+            f"Simulating wear: the model's delivered flow is {gap:.0f}% below the "
+            f"healthy Danfoss reference at {r.rpm:.0f} rpm. On the real pump, a gap "
+            f"like this would point to volumetric loss (internal slip or wear)."))
+    else:
+        msgs.append(("info",
+            "At 100% health the model sits on the Danfoss reference by construction. "
+            "Enter a measured field reading to compare the real pump against it."))
+
+    if not measured:
+        return msgs
+
+    # --- measured flow vs the manufacturer reference -------------------
+    f = measured.get("frequency_hz")
+    qm = measured.get("flow")
+    if f and qm:
+        rpm_m = rpm_from_frequency(f)
+        ref = nominal_flow(rpm_m)
+        gap = (qm - ref) / ref * 100.0 if ref else 0.0
+        if abs(gap) <= FLOW_TOL:
+            msgs.append(("ok",
+                f"Measured flow ({qm:.2f} m³/h) matches the Danfoss reference within "
+                f"{gap:+.1f}% at {rpm_m:.0f} rpm — the pump is delivering as specified."))
+        elif gap < 0:
+            msgs.append(("warn",
+                f"Measured flow is {abs(gap):.1f}% BELOW the reference at {rpm_m:.0f} rpm "
+                f"→ volumetric loss: internal slip or wear, suction starvation or "
+                f"cavitation, or a clogged inlet filter."))
+        else:
+            msgs.append(("info",
+                f"Measured flow is {gap:.1f}% ABOVE the reference. A positive-displacement "
+                f"pump cannot exceed its geometric flow, so this usually means a "
+                f"measurement issue — check the flow-meter calibration or the rpm reading, "
+                f"or recalibrate the reference to this pump."))
+
+    # --- measured power vs the manufacturer reference -----------------
+    pm = measured.get("power")
+    pp = measured.get("outlet_pressure")
+    if pm and pp:
+        q_for_power = qm if qm else r.flow
+        ref_p = shaft_power(q_for_power, pp)
+        gap = (pm - ref_p) / ref_p * 100.0 if ref_p else 0.0
+        if abs(gap) <= POWER_TOL:
+            msgs.append(("ok",
+                f"Measured power ({pm:.2f} kW) matches the Danfoss reference within "
+                f"{gap:+.1f}% for this flow and pressure."))
+        elif gap > 0:
+            msgs.append(("warn",
+                f"Measured power is {gap:.1f}% ABOVE the reference for this flow and "
+                f"pressure → extra losses (friction, bearing or seal wear) or a higher "
+                f"actual pressure than assumed."))
+        else:
+            msgs.append(("info",
+                f"Measured power is {abs(gap):.1f}% below the reference — a lighter load "
+                f"than modelled, or a power-reading issue worth checking."))
+
+    return msgs
+
+
+# ---------------------------------------------------------------------
 # Reference curves for plotting (manufacturer lines to compare against)
 # ---------------------------------------------------------------------
 def flow_reference(points: int = 33) -> list[tuple[float, float]]:
