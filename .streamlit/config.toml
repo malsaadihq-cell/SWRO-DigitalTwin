@@ -1,9 +1,9 @@
 [theme]
 base = "light"
-primaryColor = "#7A5C3E"          # بُنّي محمّص
-backgroundColor = "#F2F1EC"       # ورق محايد فاتح
-secondaryBackgroundColor = "#E7E5DD"
-textColor = "#242320"
+primaryColor = "#2E5F7E"
+backgroundColor = "#F3F1EA"
+secondaryBackgroundColor = "#E8E4D9"
+textColor = "#23211D"
 font = "sans serif"
 
 [server]
