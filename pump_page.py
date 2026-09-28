@@ -16,8 +16,10 @@ import streamlit as st
 
 from core import pump
 
-TEAL = "#0F766E"
-RED = "#B91C1C"
+LINE = "#285A7A"   # steel blue — manufacturer reference line / active block
+DOT = "#C2703A"    # warm amber — current operating point
+INK = "#201E1A"    # text on charts
+GRID = "#D7D1C4"   # soft gridlines
 
 
 def _kpi_row(r: pump.PumpResult) -> None:
@@ -74,38 +76,48 @@ def _equations_and_sources(r: pump.PumpResult) -> None:
             )
 
 
+def _style(layer: alt.LayerChart, title: str) -> alt.LayerChart:
+    """Make a chart readable and on-brand, independent of the app theme."""
+    return (
+        layer.properties(title=title, height=300)
+        .configure(background="transparent")
+        .configure_view(strokeWidth=0)
+        .configure_title(color=INK, fontSize=15, anchor="start")
+        .configure_axis(labelColor=INK, titleColor=INK,
+                        labelFontSize=12, titleFontSize=13,
+                        gridColor=GRID, domainColor=INK, tickColor=INK)
+    )
+
+
+def _dot(df: pd.DataFrame, x: str, y: str, tips: list) -> alt.Chart:
+    return alt.Chart(df).mark_point(
+        size=200, color=DOT, filled=True, stroke="#FFFFFF", strokeWidth=1.5
+    ).encode(x=f"{x}:Q", y=f"{y}:Q", tooltip=tips)
+
+
 def _curve_flow_vs_rpm(r: pump.PumpResult) -> alt.LayerChart:
     ref = pd.DataFrame(pump.flow_reference(), columns=["rpm", "flow"])
-    line = alt.Chart(ref).mark_line(color=TEAL, strokeWidth=2).encode(
+    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3).encode(
         x=alt.X("rpm:Q", title="Speed (rpm)"),
         y=alt.Y("flow:Q", title="Flow (m³/h)"),
     )
-    point = pd.DataFrame([{"rpm": r.rpm, "flow": r.flow}])
-    dot = alt.Chart(point).mark_point(size=160, color=RED, filled=True).encode(
-        x="rpm:Q", y="flow:Q",
-        tooltip=[alt.Tooltip("rpm:Q", format=".0f"),
-                 alt.Tooltip("flow:Q", format=".2f", title="flow (m³/h)")],
-    )
-    return (line + dot).properties(
-        title="Flow vs speed — Danfoss manual p. 25 (line) with operating point",
-        height=300)
+    dot = _dot(pd.DataFrame([{"rpm": r.rpm, "flow": r.flow}]), "rpm", "flow",
+               [alt.Tooltip("rpm:Q", format=".0f"),
+                alt.Tooltip("flow:Q", format=".2f", title="flow (m³/h)")])
+    return _style(line + dot, "Flow vs speed  ·  Danfoss p. 25")
 
 
 def _curve_power_vs_pressure(r: pump.PumpResult) -> alt.LayerChart:
     ref = pd.DataFrame(pump.power_reference(r.flow), columns=["pressure", "power"])
-    line = alt.Chart(ref).mark_line(color=TEAL, strokeWidth=2).encode(
+    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3).encode(
         x=alt.X("pressure:Q", title="Outlet pressure (bar)"),
         y=alt.Y("power:Q", title="Shaft power (kW)"),
     )
-    point = pd.DataFrame([{"pressure": r.outlet_pressure, "power": r.shaft_power}])
-    dot = alt.Chart(point).mark_point(size=160, color=RED, filled=True).encode(
-        x="pressure:Q", y="power:Q",
-        tooltip=[alt.Tooltip("pressure:Q", format=".1f", title="p_out (bar)"),
-                 alt.Tooltip("power:Q", format=".2f", title="power (kW)")],
-    )
-    return (line + dot).properties(
-        title="Power vs pressure — Danfoss manual p. 26 (line) at current flow",
-        height=300)
+    dot = _dot(pd.DataFrame([{"pressure": r.outlet_pressure, "power": r.shaft_power}]),
+               "pressure", "power",
+               [alt.Tooltip("pressure:Q", format=".1f", title="p_out (bar)"),
+                alt.Tooltip("power:Q", format=".2f", title="power (kW)")])
+    return _style(line + dot, "Power vs pressure  ·  Danfoss p. 26")
 
 
 def render(controls: dict, feed: dict) -> None:
@@ -127,9 +139,9 @@ def render(controls: dict, feed: dict) -> None:
     _equations_and_sources(r)
 
     st.subheader("Performance maps — model vs manufacturer reference")
-    st.caption("Teal line = Danfoss reference. Red dot = current operating "
-               "point. On the plant, overlay measured points here; a gap from "
-               "the line flags wear or lost efficiency.")
+    st.caption("The line is the Danfoss reference; the amber dot is the "
+               "current operating point. On the plant, overlay measured points "
+               "here; a gap from the line flags wear or lost efficiency.")
     left, right = st.columns(2)
-    left.altair_chart(_curve_flow_vs_rpm(r), width='stretch')
-    right.altair_chart(_curve_power_vs_pressure(r), width='stretch')
+    left.altair_chart(_curve_flow_vs_rpm(r), theme=None, width='stretch')
+    right.altair_chart(_curve_power_vs_pressure(r), theme=None, width='stretch')
