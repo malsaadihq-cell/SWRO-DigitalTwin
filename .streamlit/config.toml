@@ -2,7 +2,7 @@
 
 base = "light"
 primaryColor = "#D97757"             # Claude clay — accent (sliders, highlights)
-backgroundColor = "#262323"          # warm cream — page background
+backgroundColor = "#E5DECD"          # warm cream — page background
 secondaryBackgroundColor = "#EAE6DC" # soft sand — sidebar / cards
 textColor = "#2B2A27"                # warm dark ink — body text
 font = "sans serif"
