@@ -1,0 +1,11 @@
+[theme]
+# A calm, technical, water-facing palette for the SWRO twin.
+# Deliberately not the cream + terracotta look; deep teal on cool white.
+primaryColor = "#0F766E"
+backgroundColor = "#FBFCFC"
+secondaryBackgroundColor = "#EEF3F4"
+textColor = "#14262B"
+font = "sans serif"
+
+[server]
+runOnSave = true
