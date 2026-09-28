@@ -1,11 +1,14 @@
 [theme]
-# Light, clean, water-facing look. Change any of the 5 values below to
-# recolour the whole app — no code changes needed.
-base = "light"                       # "light" or "dark" starting point
-primaryColor = "#0F766E"             # accent: sliders, highlights, links
-backgroundColor = "#FFFFFF"          # main page background
-secondaryBackgroundColor = "#EEF3F4" # sidebar / cards / table header
-textColor = "#14262B"                # body text
+# King Abdulaziz University identity, tuned for a lecture-hall projector:
+# a warm cream page (KAU's own off-white) — not glaring white, not dark —
+# with deep KAU green text and a medium-green accent. All five values are
+# official KAU brand colours (kau.edu.sa corporate identity).
+# Change any value to recolour the whole app; no code edits needed.
+base = "light"
+primaryColor = "#208D44"             # KAU green 02 — accent (sliders, highlights)
+backgroundColor = "#F0EEE9"          # KAU off-white 05 — page background
+secondaryBackgroundColor = "#D3E6BE" # KAU pale green 04 — sidebar / cards
+textColor = "#0A353E"                # KAU deep green — body text
 font = "sans serif"
 
 [server]
