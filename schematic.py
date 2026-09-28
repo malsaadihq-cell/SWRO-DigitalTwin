@@ -12,7 +12,7 @@ sanitizers reparent the node that follows a comment.
 """
 from __future__ import annotations
 
-ACCENT = "#0F766E"
+ACCENT = "#285A7A"
 
 
 def _pen(block: str, active: str) -> tuple[str, str, str]:
