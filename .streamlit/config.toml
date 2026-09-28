@@ -1,9 +1,10 @@
 [theme]
+
 base = "light"
-primaryColor = "#2E5F7E"
-backgroundColor = "#F3F1EA"
-secondaryBackgroundColor = "#E8E4D9"
-textColor = "#23211D"
+primaryColor = "#285A7A"             # deep steel blue — accent
+backgroundColor = "#F1EEE6"          # warm paper — page background
+secondaryBackgroundColor = "#E5E1D6" # sand — sidebar / cards
+textColor = "#201E1A"                # warm near-black — body text
 font = "sans serif"
 
 [server]
