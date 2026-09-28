@@ -1,14 +1,10 @@
 [theme]
-# King Abdulaziz University identity, tuned for a lecture-hall projector:
-# a warm cream page (KAU's own off-white) — not glaring white, not dark —
-# with deep KAU green text and a medium-green accent. All five values are
-# official KAU brand colours (kau.edu.sa corporate identity).
-# Change any value to recolour the whole app; no code edits needed.
+
 base = "light"
-primaryColor = "#208D44"             # KAU green 02 — accent (sliders, highlights)
-backgroundColor = "#F0EEE9"          # KAU off-white 05 — page background
-secondaryBackgroundColor = "#D3E6BE" # KAU pale green 04 — sidebar / cards
-textColor = "#0A353E"                # KAU deep green — body text
+primaryColor = "#D97757"             # Claude clay — accent (sliders, highlights)
+backgroundColor = "#F4F1EA"          # warm cream — page background
+secondaryBackgroundColor = "#EAE6DC" # soft sand — sidebar / cards
+textColor = "#2B2A27"                # warm dark ink — body text
 font = "sans serif"
 
 [server]
