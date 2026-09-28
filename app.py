@@ -76,6 +76,10 @@ MODES = {
         charts=["brine_vs_open"],
         note="Characterise the throttling valve on its own: flow passed vs opening and pressure drop.",
     ),
+    "Architecture": dict(
+        controls=[], kpis=[], charts=[],
+        note="System overview — how the whole digital twin fits together.",
+    ),
 }
 
 PLACEHOLDER = "—"
@@ -120,6 +124,9 @@ def sidebar() -> tuple[str, dict, dict]:
         default="Full system",
     ) or "Full system"
     st.sidebar.caption(MODES[mode]["note"])
+
+    if mode == "Architecture":
+        return mode, {}, {}
 
     keys = MODES[mode]["controls"]
     controls: dict = {}
@@ -205,10 +212,16 @@ def main() -> None:
 
     st.title("SWRO Digital Twin — Rabigh Pilot Plant")
     st.caption("Phase 1 · steady-state model of the pilot single-element "
-               "seawater RO skid, built block by block from plant and "
-               "manufacturer data.")
+               "seawater RO skid · King Abdulaziz University — Water Research "
+               "Center, Rabigh.")
 
     mode, controls, feed = sidebar()
+
+    # Architecture overview is its own page (no plant schematic needed).
+    if mode == "Architecture":
+        import architecture_page
+        architecture_page.render()
+        return
 
     # Whole-plant schematic, with the current block highlighted.
     import schematic
