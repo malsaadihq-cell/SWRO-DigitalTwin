@@ -19,10 +19,12 @@ import streamlit as st
 # Adding or changing a mode is a data edit here, not new UI code.
 # ---------------------------------------------------------------------
 CONTROLS = {
-    "frequency":     dict(label="VFD frequency", unit="Hz",  min=24.0, max=50.0,  default=40.0, step=0.5),
-    "valve_opening": dict(label="Brine valve opening", unit="%", min=0.0, max=100.0, default=60.0, step=1.0),
-    "feed_pressure": dict(label="Feed pressure", unit="bar", min=30.0, max=70.0,  default=55.0, step=0.5),
-    "valve_dp":      dict(label="Pressure drop across valve", unit="bar", min=1.0, max=70.0, default=50.0, step=1.0),
+    "frequency":      dict(label="VFD frequency", unit="Hz",  min=24.0, max=50.0,  default=40.0, step=0.5),
+    "outlet_pressure": dict(label="Pump outlet pressure", unit="bar", min=30.0, max=70.0, default=55.0, step=0.5),
+    "health_factor":  dict(label="Pump health (simulate wear)", unit="%", min=80.0, max=100.0, default=100.0, step=1.0),
+    "valve_opening":  dict(label="Brine valve opening", unit="%", min=0.0, max=100.0, default=60.0, step=1.0),
+    "feed_pressure":  dict(label="Feed pressure", unit="bar", min=30.0, max=70.0,  default=55.0, step=0.5),
+    "valve_dp":       dict(label="Pressure drop across valve", unit="bar", min=1.0, max=70.0, default=50.0, step=1.0),
 }
 
 KPIS = {
@@ -55,10 +57,12 @@ MODES = {
         note="Both knobs are live. The model solves the operating point and every KPI.",
     ),
     "Pump only": dict(
-        controls=["frequency"],
+        controls=["frequency", "outlet_pressure", "health_factor"],
         kpis=["feed_flow", "shaft_power"],
         charts=["flow_vs_freq", "power_vs_p"],
-        note="Positive-displacement pump: frequency sets the feed flow, almost independent of pressure.",
+        note="Danfoss APP 11/1500. Frequency sets flow; outlet pressure is a "
+             "free input here (in the full system it is solved). Health < 100% "
+             "simulates a worn pump.",
     ),
     "Membrane only": dict(
         controls=["feed_pressure"],
@@ -182,20 +186,24 @@ def main() -> None:
     st.caption("Phase 1 — single-element seawater RO • Water Research Center, Rabigh")
 
     mode, controls, feed = sidebar()
-    result = run_model(mode, controls, feed)
 
-    if result is None:
-        st.info(
-            "Interface foundation. The controls on the left are live; the "
-            "KPIs and charts fill in once the pump, membrane and valve "
-            "models are connected — one block at a time."
-        )
+    # Built blocks get their own rich, fully-sourced page.
+    if mode == "Pump only":
+        import pump_page
+        pump_page.render(controls, feed)
+        return
 
+    # Unbuilt blocks still show the interface foundation (empty state).
+    st.info(
+        "Interface foundation. The controls on the left are live; the KPIs "
+        "and charts fill in once this block's model is connected. Pump is "
+        "done — try the “Pump only” mode."
+    )
     st.subheader("Key performance indicators")
-    kpi_row(mode, result)
+    kpi_row(mode, None)
 
     st.subheader("Performance maps")
-    charts_section(mode, result)
+    charts_section(mode, None)
 
 
 if __name__ == "__main__":
