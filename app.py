@@ -183,9 +183,20 @@ def main() -> None:
     )
 
     st.title("SWRO Digital Twin — Rabigh Pilot Plant")
-    st.caption("Phase 1 — single-element seawater RO • Water Research Center, Rabigh")
+    st.caption("Phase 1 · steady-state model of the pilot single-element "
+               "seawater RO skid, built block by block from plant and "
+               "manufacturer data.")
 
     mode, controls, feed = sidebar()
+
+    # Whole-plant schematic, with the current block highlighted.
+    import schematic
+    st.markdown(
+        f'<div style="max-width:720px;margin:0.25rem auto 0.5rem;">'
+        f'{schematic.system_svg(schematic.MODE_TO_BLOCK.get(mode, "all"))}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
     # Built blocks get their own rich, fully-sourced page.
     if mode == "Pump only":
