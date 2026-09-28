@@ -1,9 +1,9 @@
 """Pump-only view.
 
-Built to answer three questions at a glance, because the examiner asks
-them every time:
-    "where did these numbers come from?"  -> a Characteristics table with
-                                             a Source column citing Danfoss
+Built to answer three questions the examiner asks every time:
+    "where did these numbers come from?"  -> a Characteristics table with a
+                                             plain-language meaning and the
+                                             exact Danfoss manual page
     "where are the laws?"                 -> the equations, shown as maths
     "how did you get THIS number?"        -> each law re-printed with the
                                              current values substituted in
@@ -23,13 +23,17 @@ RED = "#B91C1C"
 def _kpi_row(r: pump.PumpResult) -> None:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Feed flow (m³/h)", f"{r.flow:.2f}",
-              help="Q = Q_rated × rpm/1500 × health  (Danfoss DS §5)")
+              help="Delivered flow. Law: Q = rated flow × rpm/1500 × health "
+                   "(Danfoss manual, p. 25).")
     c2.metric("Shaft power (kW)", f"{r.shaft_power:.2f}",
-              help="P = 16.7 × Q × p_out / 475  (Danfoss DS §7)")
+              help="Absorbed power. Equation: P = 16.7 × Q × p_out / 475 "
+                   "(Danfoss manual, p. 26).")
     c3.metric("Volumetric efficiency (%)", f"{r.volumetric_efficiency*100:.1f}",
-              help="η_v = delivered flow / geometric flow (displacement × rpm)")
+              help="Delivered flow divided by geometric flow "
+                   "(displacement × rpm). A drop signals wear.")
     c4.metric("Specific energy (kWh/m³)", f"{r.specific_energy:.2f}",
-              help="e = shaft power / feed flow")
+              help="Shaft power divided by feed flow — energy to pump each "
+                   "cubic metre of feed.")
 
 
 def _equations_and_sources(r: pump.PumpResult) -> None:
@@ -44,23 +48,30 @@ def _equations_and_sources(r: pump.PumpResult) -> None:
             st.latex(r.worked["eta"])
             st.latex(r.worked["sec"])
             st.caption(
-                "Flow law: Danfoss APP 11-13 data sheet §5 (flow ∝ rpm). "
-                "Power equation and calc-factor 475: §7. "
-                "Speed–frequency ratio: project Chapter 4."
+                "Flow law from the Danfoss manual, p. 25 (flow is proportional "
+                "to rpm). Power equation and the calc-factor 475 from p. 26. "
+                "Frequency-to-speed ratio from the plant documentation "
+                "(Chapter 4). The exact page for every value is in the table."
             )
 
         with right:
-            st.markdown("**Characteristics — every value with its source**")
+            st.markdown("**Characteristics — what each value is and where it comes from**")
             rows = [
                 {"Parameter": k.replace("_", " "),
+                 "What it is": s.what,
                  "Value": f"{s.value:g}",
                  "Unit": s.unit,
                  "Source": s.source}
                 for k, s in pump.CHARACTERISTICS.items()
             ]
             df = pd.DataFrame(rows)
-            st.dataframe(df, hide_index=True, width='stretch',
-                         column_config={"Source": st.column_config.TextColumn(width="large")})
+            st.dataframe(
+                df, hide_index=True, width='stretch',
+                column_config={
+                    "What it is": st.column_config.TextColumn(width="medium"),
+                    "Source": st.column_config.TextColumn(width="large"),
+                },
+            )
 
 
 def _curve_flow_vs_rpm(r: pump.PumpResult) -> alt.LayerChart:
@@ -76,7 +87,7 @@ def _curve_flow_vs_rpm(r: pump.PumpResult) -> alt.LayerChart:
                  alt.Tooltip("flow:Q", format=".2f", title="flow (m³/h)")],
     )
     return (line + dot).properties(
-        title="Flow vs speed — Danfoss DS §5 (line) with operating point",
+        title="Flow vs speed — Danfoss manual p. 25 (line) with operating point",
         height=300)
 
 
@@ -93,7 +104,7 @@ def _curve_power_vs_pressure(r: pump.PumpResult) -> alt.LayerChart:
                  alt.Tooltip("power:Q", format=".2f", title="power (kW)")],
     )
     return (line + dot).properties(
-        title="Power vs pressure — Danfoss DS §7 (line) at current flow",
+        title="Power vs pressure — Danfoss manual p. 26 (line) at current flow",
         height=300)
 
 
@@ -117,8 +128,8 @@ def render(controls: dict, feed: dict) -> None:
 
     st.subheader("Performance maps — model vs manufacturer reference")
     st.caption("Teal line = Danfoss reference. Red dot = current operating "
-               "point. On the plant, overlay measured points here; a gap "
-               "from the line flags wear or lost efficiency.")
+               "point. On the plant, overlay measured points here; a gap from "
+               "the line flags wear or lost efficiency.")
     left, right = st.columns(2)
     left.altair_chart(_curve_flow_vs_rpm(r), width='stretch')
     right.altair_chart(_curve_power_vs_pressure(r), width='stretch')
