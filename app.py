@@ -97,6 +97,21 @@ def run_model(mode: str, controls: dict, feed: dict):
 # ---------------------------------------------------------------------
 # UI pieces
 # ---------------------------------------------------------------------
+def _slider(key: str) -> float:
+    c = CONTROLS[key]
+    return st.sidebar.slider(
+        f"{c['label']} ({c['unit']})",
+        min_value=c["min"], max_value=c["max"],
+        value=c["default"], step=c["step"],
+    )
+
+
+# controls that set the operating point vs. controls that inject a fault
+OPERATING_CONTROLS = ["frequency", "outlet_pressure", "feed_pressure",
+                      "valve_opening", "valve_dp"]
+WHATIF_CONTROLS = ["health_factor"]
+
+
 def sidebar() -> tuple[str, dict, dict]:
     st.sidebar.header("Controls")
     mode = st.sidebar.segmented_control(
@@ -104,23 +119,29 @@ def sidebar() -> tuple[str, dict, dict]:
         options=list(MODES.keys()),
         default="Full system",
     ) or "Full system"
-
     st.sidebar.caption(MODES[mode]["note"])
-    st.sidebar.divider()
 
+    keys = MODES[mode]["controls"]
     controls: dict = {}
-    for key in MODES[mode]["controls"]:
-        c = CONTROLS[key]
-        value = st.sidebar.slider(
-            f"{c['label']} ({c['unit']})",
-            min_value=c["min"], max_value=c["max"],
-            value=c["default"], step=c["step"],
-        )
-        controls[key] = value
 
-    # rpm helper under the frequency slider
-    if "frequency" in controls:
-        st.sidebar.caption(f"≈ {controls['frequency'] * 30:.0f} rpm")
+    op_keys = [k for k in keys if k in OPERATING_CONTROLS]
+    wi_keys = [k for k in keys if k in WHATIF_CONTROLS]
+
+    if op_keys:
+        st.sidebar.divider()
+        st.sidebar.markdown("**Operating point**")
+        for key in op_keys:
+            controls[key] = _slider(key)
+            if key == "frequency":
+                st.sidebar.caption(f"≈ {controls[key] * 30:.0f} rpm")
+
+    if wi_keys:
+        st.sidebar.divider()
+        st.sidebar.markdown("**Condition — what-if**")
+        for key in wi_keys:
+            controls[key] = _slider(key)
+        st.sidebar.caption("100% is a healthy pump; lower it to simulate wear "
+                           "and watch the operating point drop off the curve.")
 
     st.sidebar.divider()
     with st.sidebar.expander("Feed conditions", expanded=False):
