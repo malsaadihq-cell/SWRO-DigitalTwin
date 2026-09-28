@@ -1,1 +1,12 @@
+[theme]
+# Light, clean, water-facing look. Change any of the 5 values below to
+# recolour the whole app — no code changes needed.
+base = "light"                       # "light" or "dark" starting point
+primaryColor = "#0F766E"             # accent: sliders, highlights, links
+backgroundColor = "#D624E3"          # main page background
+secondaryBackgroundColor = "#EEF3F4" # sidebar / cards / table header
+textColor = "#14262B"                # body text
+font = "sans serif"
 
+[server]
+runOnSave = true
