@@ -1,243 +1,298 @@
-"""Pump-only view.
+"""Pump block — Danfoss APP 11 / 1500 (code 180B3211).
 
-Answers the examiner's recurring questions on the page itself:
-  "where did the numbers come from?" -> sourced, page-cited characteristics
-  "where are the laws?"              -> equations shown as maths
-  "how did you get THIS number?"     -> laws with the current values plugged in
-  "what does the point mean?"        -> a plain-language reading of the point
-  "where is the twin?"               -> enter a real measured reading and see
-                                        the gap to the manufacturer reference
+Design rule for this file: nothing is a bare number. Every characteristic
+carries what it means and the exact manual page it comes from, and every
+law is a named function whose docstring cites its source. That way the
+app can show, next to each result, "this number means X, it came from
+page Y, and it was used in this equation" — which is what the examiner
+asks for.
+
+Pump identity is confirmed: the manual's Technical-data table (p. 24)
+lists code 180B3211 as APP 11 / 1500, and that same code is on the plant
+nameplate. So we use that variant's numbers.
+
+Manual = "2 HPP O&M Manual APP 11-13 Pumps" (Danfoss). Page numbers below
+are the PDF page numbers of that file.
 """
 from __future__ import annotations
 
-import altair as alt
-import pandas as pd
-import streamlit as st
+import math
+from dataclasses import dataclass, field
 
-from core import pump
-
-LINE = "#285A7A"      # steel blue — manufacturer reference line / active block
-MODEL = "#C2703A"     # warm amber — model operating point
-MEASURED = "#6A4C93"  # muted purple — a real reading you entered
-INK = "#201E1A"
-GRID = "#D7D1C4"
-SHADE = "#B4553A"     # forbidden-zone tint
+# Sources, with page numbers in the Danfoss manual
+P24 = "Danfoss APP 11-13 manual, p. 24 — Technical data table (code 180B3211)"
+P25 = "Danfoss APP 11-13 manual, p. 25 — Flow at different rpm"
+P26 = "Danfoss APP 11-13 manual, p. 26 — Power requirements (APP 11/1500)"
+CH4 = "Project Chapter 4 — instrument survey (50 Hz corresponds to 1500 rpm)"
 
 
 # ---------------------------------------------------------------------
-# KPIs
+# A characteristic = value + unit + what it means + where it comes from
 # ---------------------------------------------------------------------
-def _kpi_row(r: pump.PumpResult) -> None:
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Feed flow (m³/h)", f"{r.flow:.2f}",
-              help="Delivered flow. Law: Q = rated flow × rpm/1500 × health "
-                   "(Danfoss manual, p. 25).")
-    c2.metric("Shaft power (kW)", f"{r.shaft_power:.2f}",
-              help="Absorbed power. Equation: P = 16.7 × Q × p_out / 475 "
-                   "(Danfoss manual, p. 26).")
-    c3.metric("Volumetric efficiency (%)", f"{r.volumetric_efficiency*100:.1f}",
-              help="Delivered flow divided by geometric flow "
-                   "(displacement × rpm). A drop signals wear.")
-    c4.metric("Specific energy (kWh/m³)", f"{r.specific_energy:.2f}",
-              help="Shaft power divided by feed flow — energy to pump each "
-                   "cubic metre of feed.")
+@dataclass(frozen=True)
+class Spec:
+    value: float
+    unit: str
+    what: str      # plain-language meaning, for the examiner
+    source: str
 
 
-# ---------------------------------------------------------------------
-# Equations & sources
-# ---------------------------------------------------------------------
-def _equations_and_sources(r: pump.PumpResult) -> None:
-    with st.expander("Equations, substitutions & sources", expanded=True):
-        left, right = st.columns([1, 1])
-        with left:
-            st.markdown("**Laws used — with the current values plugged in**")
-            st.latex(r.worked["rpm"])
-            st.latex(r.worked["flow"])
-            st.latex(r.worked["power"])
-            st.latex(r.worked["eta"])
-            st.latex(r.worked["sec"])
-            st.caption(
-                "Flow law from the Danfoss manual, p. 25 (flow is proportional "
-                "to rpm). Power equation and the calc-factor 475 from p. 26. "
-                "Frequency-to-speed ratio from the plant documentation "
-                "(Chapter 4). The exact page for every value is in the table."
-            )
-        with right:
-            st.markdown("**Characteristics — what each value is and where it comes from**")
-            rows = [
-                {"Parameter": k.replace("_", " "), "What it is": s.what,
-                 "Value": f"{s.value:g}", "Unit": s.unit, "Source": s.source}
-                for k, s in pump.CHARACTERISTICS.items()
-            ]
-            st.dataframe(
-                pd.DataFrame(rows), hide_index=True, width='stretch',
-                column_config={
-                    "What it is": st.column_config.TextColumn(width="medium"),
-                    "Source": st.column_config.TextColumn(width="large"),
-                },
-            )
+CHARACTERISTICS: dict[str, Spec] = {
+    "displacement": Spec(
+        137.0, "cm³/rev",
+        "Fluid volume the pump pushes per shaft revolution", P24),
+    "rated_flow": Spec(
+        11.1, "m³/h",
+        "Delivered flow at max speed (1500 rpm) and 60 bar", P24),
+    "rated_rpm": Spec(
+        1500.0, "rpm",
+        "Maximum continuous shaft speed", P24),
+    "min_rpm": Spec(
+        700.0, "rpm",
+        "Minimum continuous shaft speed", P24),
+    "outlet_min": Spec(
+        30.0, "bar",
+        "Lowest allowed discharge pressure", P24),
+    "outlet_max": Spec(
+        70.0, "bar",
+        "Highest allowed discharge pressure (continuous)", P24),
+    "inlet_min": Spec(
+        2.0, "bar",
+        "Lowest allowed suction pressure — below it, cavitation risk", P24),
+    "inlet_max": Spec(
+        5.0, "bar",
+        "Highest allowed suction pressure (continuous)", P24),
+    "power_ref": Spec(
+        24.0, "kW",
+        "Manufacturer shaft power at 1500 rpm & 60 bar — a check point", P24),
+    "calc_factor": Spec(
+        475.0, "—",
+        "Constant in the Danfoss power equation; bundles pump efficiency, "
+        "specific to this pump variant", P26),
+    "hz_to_rpm": Spec(
+        30.0, "rpm/Hz",
+        "Converts VFD frequency to shaft speed for this motor", CH4),
+}
 
 
-# ---------------------------------------------------------------------
-# Measured reading (optional, entered by hand — never assumed)
-# ---------------------------------------------------------------------
-def _measured_inputs() -> dict:
-    with st.expander("Compare with a measured field reading (optional)", expanded=False):
-        st.caption("Enter a real reading you took at the plant. Leave the fields "
-                   "blank until you have one — nothing here is assumed or generated.")
-        c1, c2, c3, c4 = st.columns(4)
-        f = c1.number_input("Frequency (Hz)", value=None, min_value=0.0,
-                            max_value=60.0, step=0.5, placeholder="—")
-        q = c2.number_input("Feed flow (m³/h)", value=None, min_value=0.0,
-                            step=0.1, placeholder="—")
-        p = c3.number_input("Outlet pressure (bar)", value=None, min_value=0.0,
-                            step=0.5, placeholder="—")
-        w = c4.number_input("Shaft power (kW)", value=None, min_value=0.0,
-                            step=0.1, placeholder="—")
-    measured = {}
-    if f is not None:
-        measured["frequency_hz"] = f
-    if q is not None:
-        measured["flow"] = q
-    if p is not None:
-        measured["outlet_pressure"] = p
-    if w is not None:
-        measured["power"] = w
-    return measured
+def spec(key: str) -> Spec:
+    return CHARACTERISTICS[key]
+
+
+def v(key: str) -> float:
+    return CHARACTERISTICS[key].value
 
 
 # ---------------------------------------------------------------------
-# Chart building blocks
+# The laws. Each returns the number; simulate() also builds the worked
+# string so the UI can show "11.1 × 1440/1500 = 10.66", not just the answer.
 # ---------------------------------------------------------------------
-def _xscale(dom):
-    return alt.Scale(domain=dom, nice=False)
+def rpm_from_frequency(hz: float) -> float:
+    """Speed from VFD frequency. Fixed ratio (Chapter 4): rpm = hz × 30."""
+    return hz * v("hz_to_rpm")
 
 
-def _envelope(field, lo, hi, dom):
-    """Shaded forbidden zones beyond the manufacturer range + boundary rules."""
-    below = alt.Chart(pd.DataFrame({"x": [dom[0]], "x2": [lo]})).mark_rect(
-        color=SHADE, opacity=0.06).encode(
-        x=alt.X("x:Q", scale=_xscale(dom)), x2="x2:Q")
-    above = alt.Chart(pd.DataFrame({"x": [hi], "x2": [dom[1]]})).mark_rect(
-        color=SHADE, opacity=0.06).encode(
-        x=alt.X("x:Q", scale=_xscale(dom)), x2="x2:Q")
-    rules = alt.Chart(pd.DataFrame({"x": [lo, hi]})).mark_rule(
-        color=SHADE, strokeDash=[4, 4], opacity=0.5).encode(
-        x=alt.X("x:Q", scale=_xscale(dom)))
-    return [below, above, rules]
+def theoretical_flow(rpm: float) -> float:
+    """Geometric (slip-free) flow of a fixed-displacement pump:
+
+        Q_theo [m³/h] = displacement [cm³/rev] × rpm × 60 / 1e6
+
+    Used only to express volumetric efficiency; not the delivered flow.
+    """
+    return v("displacement") * rpm * 60.0 / 1e6
 
 
-def _dot(df, x, y, color, shape, tips):
-    return alt.Chart(df).mark_point(
-        shape=shape, size=200, color=color, filled=True,
-        stroke="#FFFFFF", strokeWidth=1.4,
-    ).encode(x=alt.X(f"{x}:Q"), y=alt.Y(f"{y}:Q"), tooltip=tips)
+def nominal_flow(rpm: float) -> float:
+    """Delivered flow, manufacturer flow-vs-rpm law (manual p. 25):
+
+        "The flow/rpm ratio is constant"  ->  Q = Q_rated × rpm / rpm_rated
+
+    This is the straight reference line on the p. 25 chart; it already
+    includes the pump's nominal slip at rated conditions.
+    """
+    return v("rated_flow") * rpm / v("rated_rpm")
 
 
-def _style(layer, title):
-    return (layer.properties(title=title, height=300)
-            .configure(background="transparent")
-            .configure_view(strokeWidth=0)
-            .configure_title(color=INK, fontSize=15, anchor="start")
-            .configure_axis(labelColor=INK, titleColor=INK, labelFontSize=12,
-                            titleFontSize=13, gridColor=GRID, domainColor=INK,
-                            tickColor=INK))
+def shaft_power(flow_m3h: float, outlet_bar: float) -> float:
+    """Absorbed power, Danfoss equation (manual p. 26):
 
+        P [kW] = 16.7 × Q [m³/h] × p_out [bar] / calc_factor
 
-def _curve_flow(r, measured):
-    dom = [660, 1540]
-    ref = pd.DataFrame(pump.flow_reference(), columns=["rpm", "flow"])
-    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3).encode(
-        x=alt.X("rpm:Q", title="Speed (rpm)", scale=_xscale(dom)),
-        y=alt.Y("flow:Q", title="Flow (m³/h)"))
-    layers = _envelope("rpm", 700, 1500, dom) + [line]
-    layers.append(_dot(pd.DataFrame([{"rpm": r.rpm, "flow": r.flow}]),
-                       "rpm", "flow", MODEL, "circle",
-                       [alt.Tooltip("rpm:Q", format=".0f", title="model rpm"),
-                        alt.Tooltip("flow:Q", format=".2f", title="model flow")]))
-    if measured.get("frequency_hz") and measured.get("flow"):
-        mrpm = pump.rpm_from_frequency(measured["frequency_hz"])
-        layers.append(_dot(pd.DataFrame([{"rpm": mrpm, "flow": measured["flow"]}]),
-                           "rpm", "flow", MEASURED, "diamond",
-                           [alt.Tooltip("rpm:Q", format=".0f", title="measured rpm"),
-                            alt.Tooltip("flow:Q", format=".2f", title="measured flow")]))
-    return _style(alt.layer(*layers), "Flow vs speed  ·  Danfoss p. 25")
-
-
-def _curve_power(r, measured):
-    dom = [26, 74]
-    ref = pd.DataFrame(pump.power_reference(r.flow), columns=["pressure", "power"])
-    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3).encode(
-        x=alt.X("pressure:Q", title="Outlet pressure (bar)", scale=_xscale(dom)),
-        y=alt.Y("power:Q", title="Shaft power (kW)"))
-    layers = _envelope("pressure", 30, 70, dom) + [line]
-    layers.append(_dot(pd.DataFrame([{"pressure": r.outlet_pressure, "power": r.shaft_power}]),
-                       "pressure", "power", MODEL, "circle",
-                       [alt.Tooltip("pressure:Q", format=".1f", title="model p_out"),
-                        alt.Tooltip("power:Q", format=".2f", title="model power")]))
-    if measured.get("outlet_pressure") and measured.get("power"):
-        layers.append(_dot(pd.DataFrame([{"pressure": measured["outlet_pressure"],
-                                          "power": measured["power"]}]),
-                           "pressure", "power", MEASURED, "diamond",
-                           [alt.Tooltip("pressure:Q", format=".1f", title="measured p_out"),
-                            alt.Tooltip("power:Q", format=".2f", title="measured power")]))
-    return _style(alt.layer(*layers), "Power vs pressure  ·  Danfoss p. 26")
+    calc_factor = 475 for APP 11/1500 bundles the pump efficiency.
+    (Checks out: 16.7 × 11.4 × 60 / 475 = 24 kW, matching the p. 24 table.)
+    """
+    return 16.7 * flow_m3h * outlet_bar / v("calc_factor")
 
 
 # ---------------------------------------------------------------------
-# Interpretation & assumptions
+# Result of one simulated operating point
 # ---------------------------------------------------------------------
-def _interpretation(r, measured):
-    st.markdown("**Reading the operating point**")
-    render = {"ok": st.success, "warn": st.warning, "info": st.info}
-    for level, text in pump.interpret(r, measured):
-        render[level](text)
+@dataclass
+class PumpResult:
+    frequency_hz: float
+    rpm: float
+    outlet_pressure: float
+    inlet_pressure: float
+    health_factor: float          # 1.0 = healthy; < 1 simulates wear
+
+    theoretical_flow: float
+    nominal_flow: float
+    flow: float                   # delivered = nominal × health
+
+    shaft_power: float
+    volumetric_efficiency: float  # delivered / theoretical
+    specific_energy: float        # kWh per m³ of feed
+
+    kpis: dict = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    worked: dict = field(default_factory=dict)   # LaTeX bodies, no $$
 
 
-def _assumptions():
-    with st.expander("Assumptions & limits", expanded=False):
-        st.markdown(
-            "- **Steady state** — one settled operating point, no startup or transients.\n"
-            "- **Positive-displacement** — flow is set by shaft speed and treated as "
-            "independent of pressure.\n"
-            "- **Efficiency** is bundled inside the manufacturer calc-factor (475); it "
-            "is not modelled separately.\n"
-            "- **Manufacturer reference is valid only within the Danfoss range** — "
-            "700–1500 rpm and 30–70 bar. The shaded bands mark the outside.\n"
-            "- **Not yet calibrated to this specific pump.** The line is the catalogue "
-            "pump; calibration to your unit comes with the field measurements."
-        )
+def simulate(frequency_hz: float, outlet_pressure: float,
+             health_factor: float = 1.0, inlet_pressure: float = 3.0) -> PumpResult:
+    """Solve the pump block for one setting."""
+    rpm = rpm_from_frequency(frequency_hz)
+    q_theo = theoretical_flow(rpm)
+    q_nom = nominal_flow(rpm)
+    flow = q_nom * health_factor
+    power = shaft_power(flow, outlet_pressure)
+    eta_v = (flow / q_theo) if q_theo else 0.0
+    sec = (power / flow) if flow else math.inf
 
+    worked = {
+        "rpm": rf"n = f \times 30 = {frequency_hz:.1f} \times 30 = {rpm:.0f}\ \mathrm{{rpm}}",
+        "flow": (rf"Q = Q_{{rated}}\,\frac{{n}}{{n_{{rated}}}}"
+                 rf"\times h = {v('rated_flow')}\times\frac{{{rpm:.0f}}}{{1500}}"
+                 rf"\times {health_factor:.2f} = {flow:.2f}\ \mathrm{{m^3/h}}"),
+        "power": (rf"P = \frac{{16.7\,Q\,p_{{out}}}}{{k}}"
+                  rf" = \frac{{16.7 \times {flow:.2f} \times {outlet_pressure:.1f}}}{{475}}"
+                  rf" = {power:.2f}\ \mathrm{{kW}}"),
+        "eta": (rf"\eta_v = \frac{{Q}}{{Q_{{theo}}}} = \frac{{{flow:.2f}}}{{{q_theo:.2f}}}"
+                rf" = {eta_v*100:.1f}\%"),
+        "sec": (rf"e = \frac{{P}}{{Q}} = \frac{{{power:.2f}}}{{{flow:.2f}}}"
+                rf" = {sec:.2f}\ \mathrm{{kWh/m^3}}"),
+    }
 
-# ---------------------------------------------------------------------
-# Page
-# ---------------------------------------------------------------------
-def render(controls: dict, feed: dict) -> None:
-    r = pump.simulate(
-        frequency_hz=controls.get("frequency", 40.0),
-        outlet_pressure=controls.get("outlet_pressure", 55.0),
-        health_factor=controls.get("health_factor", 100.0) / 100.0,
-        inlet_pressure=feed.get("suction", 3.0),
+    result = PumpResult(
+        frequency_hz=frequency_hz, rpm=rpm, outlet_pressure=outlet_pressure,
+        inlet_pressure=inlet_pressure, health_factor=health_factor,
+        theoretical_flow=q_theo, nominal_flow=q_nom, flow=flow,
+        shaft_power=power, volumetric_efficiency=eta_v, specific_energy=sec,
+        worked=worked,
     )
+    result.kpis = {
+        "flow": flow,
+        "shaft_power": power,
+        "volumetric_efficiency": eta_v * 100.0,
+        "specific_energy": sec,
+    }
+    result.warnings = _check_limits(rpm, outlet_pressure, inlet_pressure)
+    return result
 
-    if r.warnings:
-        st.warning("Outside the manufacturer envelope:  " + "  •  ".join(r.warnings))
 
-    st.subheader("Key performance indicators")
-    _kpi_row(r)
+def _check_limits(rpm: float, outlet: float, inlet: float) -> list[str]:
+    w = []
+    if rpm < v("min_rpm") or rpm > v("rated_rpm"):
+        w.append(f"speed {rpm:.0f} rpm is outside the "
+                 f"{v('min_rpm'):.0f}–{v('rated_rpm'):.0f} rpm range (manual p. 24)")
+    if outlet < v("outlet_min") or outlet > v("outlet_max"):
+        w.append(f"outlet pressure {outlet:.1f} bar is outside the "
+                 f"{v('outlet_min'):.0f}–{v('outlet_max'):.0f} bar range (manual p. 24)")
+    if inlet < v("inlet_min"):
+        w.append(f"inlet pressure {inlet:.1f} bar is below the "
+                 f"{v('inlet_min'):.0f} bar minimum — cavitation risk (manual p. 24)")
+    return w
 
-    st.subheader("Where these numbers come from")
-    _equations_and_sources(r)
 
-    st.subheader("Performance maps — model vs manufacturer reference")
-    st.caption("Steel-blue line = Danfoss reference. Amber circle = model point. "
-               "Purple diamond = your measured reading. Shaded bands = outside the "
-               "Danfoss range. On the plant, the gap from the line flags wear or lost "
-               "efficiency.")
-    measured = _measured_inputs()
-    left, right = st.columns(2)
-    left.altair_chart(_curve_flow(r, measured), theme=None, width='stretch')
-    right.altair_chart(_curve_power(r, measured), theme=None, width='stretch')
+# ---------------------------------------------------------------------
+# Interpretation — reads the operating point and says what it means.
+# Levels: "ok" (on spec), "info" (neutral / measurement note), "warn"
+# (a real degradation signature). No data is invented; measured values
+# come only from what the user typed.
+# ---------------------------------------------------------------------
+FLOW_TOL = 3.0   # % band around the flow reference counted as "on spec"
+POWER_TOL = 5.0  # % band around the power reference counted as "on spec"
 
-    _interpretation(r, measured)
-    _assumptions()
+
+def interpret(r: PumpResult, measured: dict | None = None) -> list[tuple[str, str]]:
+    msgs: list[tuple[str, str]] = []
+
+    # --- what the model point itself means -----------------------------
+    if r.health_factor < 0.999:
+        gap = (1.0 - r.health_factor) * 100.0
+        msgs.append(("info",
+            f"Simulating wear: the model's delivered flow is {gap:.0f}% below the "
+            f"healthy Danfoss reference at {r.rpm:.0f} rpm. On the real pump, a gap "
+            f"like this would point to volumetric loss (internal slip or wear)."))
+    else:
+        msgs.append(("info",
+            "At 100% health the model sits on the Danfoss reference by construction. "
+            "Enter a measured field reading to compare the real pump against it."))
+
+    if not measured:
+        return msgs
+
+    # --- measured flow vs the manufacturer reference -------------------
+    f = measured.get("frequency_hz")
+    qm = measured.get("flow")
+    if f and qm:
+        rpm_m = rpm_from_frequency(f)
+        ref = nominal_flow(rpm_m)
+        gap = (qm - ref) / ref * 100.0 if ref else 0.0
+        if abs(gap) <= FLOW_TOL:
+            msgs.append(("ok",
+                f"Measured flow ({qm:.2f} m³/h) matches the Danfoss reference within "
+                f"{gap:+.1f}% at {rpm_m:.0f} rpm — the pump is delivering as specified."))
+        elif gap < 0:
+            msgs.append(("warn",
+                f"Measured flow is {abs(gap):.1f}% BELOW the reference at {rpm_m:.0f} rpm "
+                f"→ volumetric loss: internal slip or wear, suction starvation or "
+                f"cavitation, or a clogged inlet filter."))
+        else:
+            msgs.append(("info",
+                f"Measured flow is {gap:.1f}% ABOVE the reference. A positive-displacement "
+                f"pump cannot exceed its geometric flow, so this usually means a "
+                f"measurement issue — check the flow-meter calibration or the rpm reading, "
+                f"or recalibrate the reference to this pump."))
+
+    # --- measured power vs the manufacturer reference -----------------
+    pm = measured.get("power")
+    pp = measured.get("outlet_pressure")
+    if pm and pp:
+        q_for_power = qm if qm else r.flow
+        ref_p = shaft_power(q_for_power, pp)
+        gap = (pm - ref_p) / ref_p * 100.0 if ref_p else 0.0
+        if abs(gap) <= POWER_TOL:
+            msgs.append(("ok",
+                f"Measured power ({pm:.2f} kW) matches the Danfoss reference within "
+                f"{gap:+.1f}% for this flow and pressure."))
+        elif gap > 0:
+            msgs.append(("warn",
+                f"Measured power is {gap:.1f}% ABOVE the reference for this flow and "
+                f"pressure → extra losses (friction, bearing or seal wear) or a higher "
+                f"actual pressure than assumed."))
+        else:
+            msgs.append(("info",
+                f"Measured power is {abs(gap):.1f}% below the reference — a lighter load "
+                f"than modelled, or a power-reading issue worth checking."))
+
+    return msgs
+
+
+# ---------------------------------------------------------------------
+# Reference curves for plotting (manufacturer lines to compare against)
+# ---------------------------------------------------------------------
+def flow_reference(points: int = 33) -> list[tuple[float, float]]:
+    """Manufacturer flow line (p. 25): (rpm, nominal flow) over the range."""
+    lo, hi = v("min_rpm"), v("rated_rpm")
+    return [(lo + (hi - lo) * i / (points - 1),
+             nominal_flow(lo + (hi - lo) * i / (points - 1)))
+            for i in range(points)]
+
+
+def power_reference(flow_m3h: float, points: int = 33) -> list[tuple[float, float]]:
+    """Power line (p. 26) at a fixed flow: (outlet pressure, shaft power)."""
+    lo, hi = v("outlet_min"), v("outlet_max")
+    return [(lo + (hi - lo) * i / (points - 1),
+             shaft_power(flow_m3h, lo + (hi - lo) * i / (points - 1)))
+            for i in range(points)]
