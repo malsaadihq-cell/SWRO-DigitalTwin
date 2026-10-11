@@ -22,6 +22,7 @@ CONTROLS = {
     "frequency":      dict(label="VFD frequency", unit="Hz",  min=24.0, max=50.0,  default=40.0, step=0.5),
     "outlet_pressure": dict(label="Pump outlet pressure", unit="bar", min=30.0, max=70.0, default=55.0, step=0.5),
     "health_factor":  dict(label="Pump health (simulate wear)", unit="%", min=80.0, max=100.0, default=100.0, step=1.0),
+    "fouling":        dict(label="Membrane condition (simulate fouling)", unit="%", min=70.0, max=100.0, default=100.0, step=1.0),
     "valve_opening":  dict(label="Brine valve opening", unit="%", min=0.0, max=100.0, default=60.0, step=1.0),
     "feed_pressure":  dict(label="Feed pressure", unit="bar", min=30.0, max=70.0,  default=55.0, step=0.5),
     "valve_dp":       dict(label="Pressure drop across valve", unit="bar", min=1.0, max=70.0, default=50.0, step=1.0),
@@ -65,10 +66,12 @@ MODES = {
              "simulates a worn pump.",
     ),
     "Membrane only": dict(
-        controls=["feed_pressure"],
+        controls=["feed_pressure", "fouling"],
         kpis=["permeate_flow", "flux", "rejection"],
         charts=["flux_vs_p", "rej_vs_p"],
-        note="Drive the element with a feed pressure directly; the pump is out of the loop here.",
+        note="Drive the element with a feed pressure directly; the pump is out of the "
+             "loop here. Feed TDS, temperature and flow come from the feed conditions "
+             "below. Fouling < 100% lowers the membrane permeability.",
     ),
     "Valve only": dict(
         controls=["valve_opening", "valve_dp"],
@@ -155,6 +158,7 @@ def sidebar() -> tuple[str, dict, dict]:
         feed = dict(
             tds=st.number_input("Feed TDS (mg/L)", value=41000, step=500),
             temperature=st.number_input("Feed temperature (°C)", value=28.0, step=0.5),
+            feed_flow=st.number_input("Feed flow (m³/h)", value=10.5, step=0.1),
             suction=st.number_input("Suction pressure (bar)", value=3.0, step=0.1),
         )
         st.caption("Replace these with your on-site readings.")
@@ -237,12 +241,16 @@ def main() -> None:
         import pump_page
         pump_page.render(controls, feed)
         return
+    if mode == "Membrane only":
+        import membrane_page
+        membrane_page.render(controls, feed)
+        return
 
     # Unbuilt blocks still show the interface foundation (empty state).
     st.info(
         "Interface foundation. The controls on the left are live; the KPIs "
-        "and charts fill in once this block's model is connected. Pump is "
-        "done — try the “Pump only” mode."
+        "and charts fill in once this block's model is connected. The pump and "
+        "membrane blocks are done — try those modes."
     )
     st.subheader("Key performance indicators")
     kpi_row(mode, None)
