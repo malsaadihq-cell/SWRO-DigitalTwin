@@ -25,7 +25,7 @@ CONTROLS = {
     "fouling":        dict(label="Membrane condition (simulate fouling)", unit="%", min=70.0, max=100.0, default=100.0, step=1.0),
     "valve_opening":  dict(label="Brine valve opening", unit="%", min=0.0, max=100.0, default=60.0, step=1.0),
     "feed_pressure":  dict(label="Feed pressure", unit="bar", min=30.0, max=70.0,  default=55.0, step=0.5),
-    "valve_dp":       dict(label="Pressure drop across valve", unit="bar", min=1.0, max=70.0, default=50.0, step=1.0),
+    "valve_dp":       dict(label="Pressure drop across valve", unit="bar", min=1.0, max=80.0, default=54.0, step=1.0),
 }
 
 KPIS = {
@@ -244,6 +244,10 @@ def main() -> None:
     if mode == "Membrane only":
         import membrane_page
         membrane_page.render(controls, feed)
+        return
+    if mode == "Valve only":
+        import valve_page
+        valve_page.render(controls, feed)
         return
 
     # Unbuilt blocks still show the interface foundation (empty state).
