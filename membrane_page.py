@@ -32,6 +32,17 @@ def _kpi_row(r: m.MembraneResult) -> None:
     c4.metric("Recovery (%)", f"{r.recovery*100:.1f}",
               help="R = Qp / Qf (feed flow you entered).")
 
+    d1, d2, d3, d4 = st.columns(4)
+    ratio = (r.brine_flow / r.permeate_flow) if r.permeate_flow > 0 else float("inf")
+    d1.metric("Brine flow Qc (m³/h)", f"{r.brine_flow:.2f}",
+              help="Qc = Qf − Qp. Must stay above the 2.7 m³/h minimum (ESS).")
+    d2.metric("Conc./perm. ratio", ("—" if ratio == float("inf") else f"{ratio:.1f}"),
+              help="Qc / Qp. Should stay above 5:1 to keep polarisation in check.")
+    d3.metric("Net driving pressure (bar)", f"{r.ndp:.1f}",
+              help="NDP = feed pressure − ΔPe/2 − Δπ − permeate pressure.")
+    d4.metric("Osmotic Δπ (bar)", f"{r.delta_pi:.1f}",
+              help="Feed-concentrate osmotic pressure the pressure must overcome.")
+
 
 def _equations_and_sources(r: m.MembraneResult) -> None:
     with st.expander("Equations, substitutions & sources", expanded=True):
@@ -169,6 +180,37 @@ def _curve_rejection(r, feed, measured):
     return _style(alt.layer(*layers), "Salt rejection vs feed pressure  ·  IWA Ch. 9")
 
 
+def _curve_flux_vs_temp(r, feed):
+    dom = [15, 42]
+    ref = pd.DataFrame(m.flux_vs_temperature(r.feed_pressure, feed["tds"],
+                                             feed["feed_flow"], r.fouling),
+                       columns=["temp", "flux"])
+    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3).encode(
+        x=alt.X("temp:Q", title="Feed temperature (°C)", scale=_xscale(dom)),
+        y=alt.Y("flux:Q", title="Flux (LMH)"))
+    dot = _dot(pd.DataFrame([{"temp": feed["temperature"], "flux": r.flux}]),
+               "temp", "flux", MODEL, "circle",
+               [alt.Tooltip("temp:Q", format=".1f", title="temp"),
+                alt.Tooltip("flux:Q", format=".1f", title="flux")])
+    return _style(alt.layer(line, dot), "Flux vs feed temperature  (≈3%/°C)")
+
+
+def _curve_flux_vs_salinity(r, feed):
+    dom = [30000, 50000]
+    ref = pd.DataFrame(m.flux_vs_salinity(r.feed_pressure, feed["temperature"],
+                                          feed["feed_flow"], r.fouling),
+                       columns=["tds", "flux"])
+    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3).encode(
+        x=alt.X("tds:Q", title="Feed TDS (mg/L)", scale=_xscale(dom),
+                axis=alt.Axis(format=",.0f")),
+        y=alt.Y("flux:Q", title="Flux (LMH)"))
+    dot = _dot(pd.DataFrame([{"tds": feed["tds"], "flux": r.flux}]),
+               "tds", "flux", MODEL, "circle",
+               [alt.Tooltip("tds:Q", format=",.0f", title="feed TDS"),
+                alt.Tooltip("flux:Q", format=".1f", title="flux")])
+    return _style(alt.layer(line, dot), "Flux vs feed salinity")
+
+
 def _interpretation(r, measured):
     st.markdown("**Reading the operating point**")
     render = {"ok": st.success, "warn": st.warning, "info": st.info}
@@ -223,11 +265,17 @@ def render(controls: dict, feed: dict) -> None:
         "point  ·  :violet[◆ purple] your measured reading  ·  shaded = above the "
         "element's max pressure"
     )
-    left, right = st.columns(2)
-    left.altair_chart(_curve_flux(r, feed, measured), theme=None, width='stretch')
-    right.altair_chart(_curve_rejection(r, feed, measured), theme=None, width='stretch')
+    a1, a2 = st.columns(2)
+    a1.altair_chart(_curve_flux(r, feed, measured), theme=None, width='stretch')
+    a2.altair_chart(_curve_rejection(r, feed, measured), theme=None, width='stretch')
     st.caption("Flux rises only once the feed pressure beats the osmotic pressure; the gap "
                "between a point and the line is the fouling / ageing signal.")
+
+    st.markdown("**Sensitivity to the feed conditions you measure** — the amber dot is the "
+                "current point; these help you read and normalise field data.")
+    b1, b2 = st.columns(2)
+    b1.altair_chart(_curve_flux_vs_temp(r, feed), theme=None, width='stretch')
+    b2.altair_chart(_curve_flux_vs_salinity(r, feed), theme=None, width='stretch')
 
     st.divider()
     _interpretation(r, measured)
