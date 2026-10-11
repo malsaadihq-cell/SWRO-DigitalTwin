@@ -215,7 +215,10 @@ def simulate(feed_pressure: float, feed_tds: float, temperature: float,
         "rejection": rejection * 100.0,
         "recovery": recovery * 100.0,
         "permeate_tds": Cp,
+        "brine_flow": Qc,
+        "ratio": (Qc / Qp) if Qp > 0 else float("inf"),
         "ndp": ndp,
+        "delta_pi": dpi,
     }
     result.warnings = _check_envelope(result)
     return result
@@ -323,4 +326,26 @@ def rejection_reference(feed_tds, temperature, feed_flow, fouling=1.0,
         pf = lo + (hi - lo) * i / (points - 1)
         r = simulate(pf, feed_tds, temperature, feed_flow, fouling)
         out.append((pf, r.rejection * 100.0 if r.flux > 0 else None))
+    return out
+
+
+def flux_vs_temperature(feed_pressure, feed_tds, feed_flow, fouling=1.0,
+                        lo=15.0, hi=42.0, points=28):
+    """Flux sensitivity to feed temperature at the current pressure — the main
+    confounder when reading field data (about 3 % per °C)."""
+    out = []
+    for i in range(points):
+        T = lo + (hi - lo) * i / (points - 1)
+        out.append((T, simulate(feed_pressure, feed_tds, T, feed_flow, fouling).flux))
+    return out
+
+
+def flux_vs_salinity(feed_pressure, temperature, feed_flow, fouling=1.0,
+                     lo=30000.0, hi=50000.0, points=28):
+    """Flux sensitivity to feed salinity at the current pressure — Red Sea feed
+    TDS changes with season/intake."""
+    out = []
+    for i in range(points):
+        Cf = lo + (hi - lo) * i / (points - 1)
+        out.append((Cf, simulate(feed_pressure, Cf, temperature, feed_flow, fouling).flux))
     return out
