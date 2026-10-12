@@ -155,15 +155,18 @@ def sidebar() -> tuple[str, dict, dict]:
         st.sidebar.caption("100% is a healthy pump; lower it to simulate wear "
                            "and watch the operating point drop off the curve.")
 
-    st.sidebar.divider()
-    with st.sidebar.expander("Feed conditions", expanded=False):
+    # Feed conditions are membrane / full-system inputs; shown openly, only
+    # where they are actually used. (The pump's suction lives with the pump.)
+    feed = {}
+    if mode in ("Membrane only", "Full system"):
+        st.sidebar.divider()
+        st.sidebar.markdown("**Feed conditions**")
         feed = dict(
-            tds=st.number_input("Feed TDS (mg/L)", value=41000, step=500),
-            temperature=st.number_input("Feed temperature (°C)", value=28.0, step=0.5),
-            feed_flow=st.number_input("Feed flow (m³/h)", value=10.5, step=0.1),
-            suction=st.number_input("Suction pressure (bar)", value=3.0, step=0.1),
+            tds=st.sidebar.number_input("Feed TDS (mg/L)", value=41000, step=500),
+            temperature=st.sidebar.number_input("Feed temperature (°C)", value=28.0, step=0.5),
+            feed_flow=st.sidebar.number_input("Feed flow (m³/h)", value=10.5, step=0.1),
         )
-        st.caption("Replace these with your on-site readings.")
+        st.sidebar.caption("From your on-site / grab-sample readings.")
 
     return mode, controls, feed
 
