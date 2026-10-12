@@ -131,10 +131,15 @@ def simulate(opening_pct: float, brine_flow: float, sg: float | None = None) -> 
                   rf"\times {sg:.2f} = {dp:.1f}\ \mathrm{{bar}}")
     else:
         dp_str = r"\Delta P \to \infty \quad(\text{valve closed — deadhead})"
+    onset = cavitation_onset()
     worked = {
         "cv": (rf"C_v = C_{{v,max}}\,R^{{x-1}} = {v('Cv_max'):.0f}\times {v('rangeability'):.0f}"
                rf"^{{{x:.2f}-1}} = {cv:.2f}"),
         "dp": dp_str,
+        "cav": (rf"\Delta P_{{onset}} = \frac{{F_L^2\,(P_{{atm}}-F_F P_v)}}{{1-F_L^2}}"
+                rf" = \frac{{{v('FL')**2:.2f}\,({P_ATM:.2f}-{FF*PV:.2f})}}{{{1-v('FL')**2:.2f}}}"
+                rf" = {onset:.1f}\ \mathrm{{bar}}\quad(\Delta P>\Delta P_{{onset}}\Rightarrow"
+                rf"\text{{ cavitates}})"),
     }
 
     r = ValveResult(opening=opening_pct, brine_flow=brine_flow, sg=sg,
