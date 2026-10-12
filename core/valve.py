@@ -1,30 +1,41 @@
 """Valve block — NORITON 1½″ CF8M, Class 600 globe valve (brine throttle).
 
-This is the manual hand-wheel globe valve on the brine line (tag 198-VBR-001)
-that sets the recovery. It is an isolation/throttling valve to BS 1873 /
-API 623, NOT a control valve, so the manufacturer publishes no Cv-vs-opening
-curve. The values here are therefore REPRESENTATIVE for a 1½″ globe valve and
-are meant to be calibrated from plant measurements (brine flow at known
-hand-wheel positions and pressure drop) — the same path as Kw/Ks.
+Corrected framing: the valve is a variable RESISTANCE on the brine line.
+In the plant it does not meter a flow from a supplied pressure — it must
+pass whatever brine the membrane rejects, and in doing so it CREATES a
+back-pressure. That back-pressure sets the system pressure and therefore
+the recovery.
+
+  Inputs : opening (% hand-wheel travel, the operator's knob)
+           brine flow Q_brine (comes from the membrane / mass balance)
+  Output : back-pressure ΔP it develops  (+ its resistance, + cavitation)
+
+  Core law (Cv equation solved for pressure):
+           ΔP = ( Q_brine / (0.865 · Cv(opening)) )² · SG
+
+Sanity check built in: fully open (Cv → Cv_max) gives a near-zero
+back-pressure, so the system pressure collapses and nothing is produced —
+the throttling is what makes the RO work.
+
+Cv and the characteristic are REPRESENTATIVE for a 1½″ globe valve (a
+manual BS 1873 valve has no published curve) and are to be calibrated
+from plant measurements.
 
 Sources:
   NP    — valve nameplate: NORITON 1½″, CF8M, Class 600
   REP   — representative 1½″ globe value, to be calibrated on site
-  CVREF — standard control-valve references (ISA / IEC 60534; Siemens
-          "Globe and Ball Valves" sizing guide)
+  CVREF — standard control-valve references (ISA / IEC 60534; Siemens guide)
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
 
-NP = "Valve nameplate (NORITON 1½″ CF8M, Class 600)"
 REP = ("Representative for a 1½″ globe valve — a manual BS 1873 valve has no "
        "published Cv curve; calibrate from plant measurements")
 CVREF = "Standard control-valve references (ISA / IEC 60534; Siemens globe guide)"
 
-# internal constants
-KV_FACTOR = 0.865   # Kv = 0.865 · Cv  (US→metric unit conversion)
+KV_FACTOR = 0.865   # Kv = 0.865 · Cv
 FF = 0.96           # liquid critical-pressure-ratio factor (water)
 PV = 0.04           # bar abs, water vapour pressure near 28 °C
 P_ATM = 1.013       # bar, atmospheric (brine discharges to ~atmosphere)
@@ -44,14 +55,12 @@ PARAMS: dict[str, Spec] = {
     "rangeability": Spec(50.0, "—",
                          "Equal-percentage rangeability (Cv_max / Cv_min)", CVREF),
     "FL": Spec(0.9, "—",
-               "Pressure-recovery factor of a globe valve (sets the choke point)", CVREF),
+               "Pressure-recovery factor of a globe valve (sets the cavitation point)", CVREF),
     "SG": Spec(1.03, "—",
                "Brine specific gravity", "Seawater brine ≈ 1.03"),
 }
 
-ENVELOPE = {
-    "max_pressure": (100.0, "bar", "Class 600 working pressure"),
-}
+ENVELOPE = {"max_pressure": (100.0, "bar", "Class 600 working pressure")}
 
 
 def v(key: str) -> float:
@@ -62,39 +71,34 @@ def v(key: str) -> float:
 # Laws
 # ---------------------------------------------------------------------
 def cv_at(opening_pct: float) -> float:
-    """Equal-percentage characteristic (CVREF):
-
-        Cv(x) = Cv_max · R^(x−1),   x = opening fraction (0…1)
-
-    Cv is taken as 0 at the seat (fully closed).
-    """
+    """Equal-percentage characteristic: Cv(x) = Cv_max · R^(x−1), x = fraction
+    open. Cv is 0 at the seat (fully closed)."""
     x = max(0.0, min(opening_pct, 100.0)) / 100.0
     if x <= 0.0:
         return 0.0
     return v("Cv_max") * v("rangeability") ** (x - 1.0)
 
 
-def choke_dp(delta_p: float) -> float:
-    """Choked-pressure-drop limit (CVREF). The brine valve drops the whole
-    brine pressure to ~atmosphere, so P1 ≈ ΔP + atmospheric and
-
-        ΔP_choked = FL² · (P1,abs − FF·Pv)
-
-    Above this the flow saturates (cavitation / flashing)."""
-    p1_abs = delta_p + P_ATM
-    return v("FL") ** 2 * (p1_abs - FF * PV)
+def cavitation_onset() -> float:
+    """Back-pressure above which the valve cavitates (derived from the FL choke
+    condition, with the brine discharging to ~atmosphere)."""
+    fl = v("FL")
+    return fl ** 2 * (P_ATM - FF * PV) / (1.0 - fl ** 2)
 
 
-def flow(opening_pct: float, delta_p: float, sg: float) -> tuple:
-    """Brine flow passed [m³/h] = Kv · √(ΔP_eff / SG),  Kv = 0.865·Cv.
-    Returns (Q, Cv, Kv, choked, ΔP_eff)."""
+def back_pressure(brine_flow: float, opening_pct: float, sg: float) -> tuple:
+    """Back-pressure the valve develops to pass `brine_flow` at this opening:
+
+        ΔP = ( Q / (0.865 · Cv) )² · SG
+
+    Returns (ΔP, Cv, Kv, resistance). ΔP → ∞ as the valve closes (Cv → 0)."""
     cv = cv_at(opening_pct)
     kv = KV_FACTOR * cv
-    dp_ch = choke_dp(delta_p)
-    choked = delta_p > dp_ch
-    dp_eff = min(delta_p, dp_ch)
-    q = kv * math.sqrt(max(dp_eff, 0.0) / sg)
-    return q, cv, kv, choked, dp_eff
+    if kv <= 0.0:
+        return math.inf, 0.0, 0.0, math.inf
+    dp = (brine_flow / kv) ** 2 * sg
+    resistance = sg / kv ** 2            # ΔP = resistance · Q²
+    return dp, cv, kv, resistance
 
 
 # ---------------------------------------------------------------------
@@ -103,50 +107,57 @@ def flow(opening_pct: float, delta_p: float, sg: float) -> tuple:
 @dataclass
 class ValveResult:
     opening: float
-    delta_p: float
-    sg: float
     brine_flow: float
+    sg: float
+    delta_p: float        # back-pressure produced [bar]
     cv: float
     kv: float
-    choked: bool
-    dp_eff: float
+    resistance: float
+    cavitating: bool
     kpis: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     worked: dict = field(default_factory=dict)
 
 
-def simulate(opening_pct: float, delta_p: float, sg: float | None = None) -> ValveResult:
+def simulate(opening_pct: float, brine_flow: float, sg: float | None = None) -> ValveResult:
     sg = v("SG") if sg is None else sg
-    q, cv, kv, choked, dp_eff = flow(opening_pct, delta_p, sg)
-    dp_ch = choke_dp(delta_p)
+    dp, cv, kv, resistance = back_pressure(brine_flow, opening_pct, sg)
+    cavitating = dp > cavitation_onset()
 
     x = opening_pct / 100.0
+    if math.isfinite(dp):
+        dp_str = (rf"\Delta P = \left(\frac{{Q}}{{0.865\,C_v}}\right)^2 SG"
+                  rf" = \left(\frac{{{brine_flow:.2f}}}{{0.865\times {cv:.2f}}}\right)^2"
+                  rf"\times {sg:.2f} = {dp:.1f}\ \mathrm{{bar}}")
+    else:
+        dp_str = r"\Delta P \to \infty \quad(\text{valve closed — deadhead})"
     worked = {
         "cv": (rf"C_v = C_{{v,max}}\,R^{{x-1}} = {v('Cv_max'):.0f}\times {v('rangeability'):.0f}"
                rf"^{{{x:.2f}-1}} = {cv:.2f}"),
-        "choke": (rf"\Delta P_{{choked}} = F_L^2(P_1 - F_F P_v) = {v('FL'):.2f}^2"
-                  rf"\times({delta_p:.1f}+1.0-0.04) = {dp_ch:.1f}\ \mathrm{{bar}}"),
-        "q": (rf"Q = 0.865\,C_v\sqrt{{\Delta P_{{eff}}/SG}} = 0.865\times {cv:.2f}"
-              rf"\times\sqrt{{{dp_eff:.1f}/{sg:.2f}}} = {q:.2f}\ \mathrm{{m^3/h}}"),
+        "dp": dp_str,
     }
 
-    r = ValveResult(opening=opening_pct, delta_p=delta_p, sg=sg, brine_flow=q,
-                    cv=cv, kv=kv, choked=choked, dp_eff=dp_eff, worked=worked)
-    r.kpis = {"brine_flow": q, "cv": cv, "kv": kv, "dp_eff": dp_eff,
-              "choked": choked}
+    r = ValveResult(opening=opening_pct, brine_flow=brine_flow, sg=sg,
+                    delta_p=dp, cv=cv, kv=kv, resistance=resistance,
+                    cavitating=cavitating, worked=worked)
+    r.kpis = {"back_pressure": dp, "cv": cv, "resistance": resistance,
+              "cavitating": cavitating}
     r.warnings = _check(r)
     return r
 
 
 def _check(r: ValveResult) -> list[str]:
     w = []
-    if r.delta_p > ENVELOPE["max_pressure"][0]:
-        w.append(f"pressure drop {r.delta_p:.0f} bar is above the Class 600 "
-                 f"working pressure (~{ENVELOPE['max_pressure'][0]:.0f} bar)")
-    if r.choked:
-        w.append(f"choked / cavitating flow: the full brine pressure is dropped "
-                 f"across one valve (ΔP {r.delta_p:.0f} > {choke_dp(r.delta_p):.0f} bar "
-                 f"choke limit) — expect noise and erosion (CF8M is chosen for this)")
+    if r.cv <= 0.0:
+        w.append("valve fully closed — infinite back-pressure (deadhead). "
+                 "Never operate here; the pump would over-pressure the system")
+    elif not math.isfinite(r.delta_p) or r.delta_p > ENVELOPE["max_pressure"][0]:
+        w.append(f"back-pressure {r.delta_p:.0f} bar exceeds the Class 600 rating "
+                 f"(~{ENVELOPE['max_pressure'][0]:.0f} bar) — the valve is closed too far")
+    if r.cavitating and math.isfinite(r.delta_p):
+        w.append(f"cavitating: the valve drops {r.delta_p:.0f} bar across one seat "
+                 f"(onset ~{cavitation_onset():.0f} bar) — expect noise and erosion "
+                 f"(CF8M is chosen for this)")
     return w
 
 
@@ -157,52 +168,54 @@ def interpret(r: ValveResult, measured: dict | None = None) -> list[tuple[str, s
     msgs: list[tuple[str, str]] = []
     msgs.append(("info",
         "The Cv and the equal-percentage shape are representative for a 1½″ globe "
-        "valve, not a published curve. Enter a measured brine flow at a known "
-        "hand-wheel position to calibrate the real characteristic."))
-    if r.choked:
+        "valve, not a published curve. Enter a measured (opening, brine flow, "
+        "back-pressure) reading to calibrate the real characteristic."))
+    if r.cavitating and math.isfinite(r.delta_p):
         msgs.append(("warn",
-            "At this pressure drop the valve is cavitating — throttling the whole "
-            "brine pressure across one valve. This limits the flow and erodes the "
-            "trim over time; it is the main reason the body is CF8M stainless."))
+            "The valve is cavitating — it throttles most of the brine pressure across "
+            "one seat. This erodes the trim over time and is why the body is CF8M."))
 
     if not measured:
         return msgs
 
     op = measured.get("opening")
-    dp = measured.get("delta_p")
+    dp = measured.get("back_pressure")
     qm = measured.get("brine_flow")
     if op is not None and dp and qm:
-        # implied Cv from the measurement vs the assumed Cv at that opening
-        _, _, _, _, dp_eff = flow(op, dp, r.sg)
         cv_model = cv_at(op)
-        cv_meas = qm / (KV_FACTOR * math.sqrt(max(dp_eff, 1e-6) / r.sg)) if dp_eff > 0 else 0.0
+        cv_meas = qm / (KV_FACTOR * math.sqrt(max(dp, 1e-6) / r.sg))
         if cv_model > 0:
             gap = (cv_meas - cv_model) / cv_model * 100.0
             if abs(gap) <= 10:
                 msgs.append(("ok",
-                    f"Measured flow implies Cv ≈ {cv_meas:.2f} at {op:.0f}% open, within "
-                    f"{gap:+.0f}% of the assumed {cv_model:.2f} — the representative curve fits well."))
+                    f"Measured point implies Cv ≈ {cv_meas:.2f} at {op:.0f}% open, within "
+                    f"{gap:+.0f}% of the assumed {cv_model:.2f} — the representative curve fits."))
             else:
                 msgs.append(("warn",
-                    f"Measured flow implies Cv ≈ {cv_meas:.2f} at {op:.0f}% open, {gap:+.0f}% "
-                    f"from the assumed {cv_model:.2f}. Collect a few more points and recalibrate "
+                    f"Measured point implies Cv ≈ {cv_meas:.2f} at {op:.0f}% open, {gap:+.0f}% "
+                    f"from the assumed {cv_model:.2f}. Collect a few points and recalibrate "
                     f"Cv_max and the characteristic to your valve."))
     return msgs
 
 
 # ---------------------------------------------------------------------
-# Reference curves
+# Reference curves (back-pressure framing)
 # ---------------------------------------------------------------------
-def flow_vs_opening(delta_p, sg=None, points=41):
-    sg = v("SG") if sg is None else sg
-    return [(op := 100.0 * i / (points - 1), flow(op, delta_p, sg)[0])
-            for i in range(points)]
-
-
-def flow_vs_dp(opening_pct, sg=None, lo=0.0, hi=80.0, points=41):
+def bp_vs_opening(brine_flow, sg=None, lo=12.0, hi=100.0, points=45):
     sg = v("SG") if sg is None else sg
     out = []
     for i in range(points):
-        dp = lo + (hi - lo) * i / (points - 1)
-        out.append((dp, flow(opening_pct, dp, sg)[0]))
+        op = lo + (hi - lo) * i / (points - 1)
+        dp = back_pressure(brine_flow, op, sg)[0]
+        out.append((op, dp if math.isfinite(dp) else None))
+    return out
+
+
+def bp_vs_brineflow(opening_pct, sg=None, lo=0.0, hi=15.0, points=41):
+    sg = v("SG") if sg is None else sg
+    out = []
+    for i in range(points):
+        q = lo + (hi - lo) * i / (points - 1)
+        dp = back_pressure(q, opening_pct, sg)[0]
+        out.append((q, dp if math.isfinite(dp) else None))
     return out
