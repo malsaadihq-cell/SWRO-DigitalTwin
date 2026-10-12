@@ -26,6 +26,7 @@ CONTROLS = {
     "valve_opening":  dict(label="Brine valve opening", unit="%", min=0.0, max=100.0, default=60.0, step=1.0),
     "feed_pressure":  dict(label="Feed pressure", unit="bar", min=30.0, max=70.0,  default=55.0, step=0.5),
     "valve_dp":       dict(label="Pressure drop across valve", unit="bar", min=1.0, max=80.0, default=54.0, step=1.0),
+    "brine_flow":     dict(label="Brine flow to pass", unit="m³/h", min=0.0, max=17.0, default=9.5, step=0.1),
 }
 
 KPIS = {
@@ -74,10 +75,11 @@ MODES = {
              "below. Fouling < 100% lowers the membrane permeability.",
     ),
     "Valve only": dict(
-        controls=["valve_opening", "valve_dp"],
+        controls=["valve_opening", "brine_flow"],
         kpis=["valve_flow"],
         charts=["brine_vs_open"],
-        note="Characterise the throttling valve on its own: flow passed vs opening and pressure drop.",
+        note="The valve is a resistance: set the opening and the brine flow it must pass; "
+             "the model gives the back-pressure it develops (which sets the recovery).",
     ),
     "Architecture": dict(
         controls=[], kpis=[], charts=[],
@@ -115,7 +117,7 @@ def _slider(key: str) -> float:
 
 # controls that set the operating point vs. controls that inject a fault
 OPERATING_CONTROLS = ["frequency", "outlet_pressure", "feed_pressure",
-                      "valve_opening", "valve_dp"]
+                      "valve_opening", "valve_dp", "brine_flow"]
 WHATIF_CONTROLS = ["health_factor"]
 
 
