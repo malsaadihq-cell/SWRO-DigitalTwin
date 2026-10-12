@@ -1,10 +1,10 @@
 """Core models of the SWRO digital twin.
 
-Built block by block: the high-pressure pump, the membrane element, and
-the brine throttle valve.
+Built block by block, then coupled: pump, membrane, valve -> full system.
 """
 from . import pump
 from . import membrane
 from . import valve
+from . import system
 
-__all__ = ["pump", "membrane", "valve"]
+__all__ = ["pump", "membrane", "valve", "system"]
