@@ -56,6 +56,9 @@ def _equations_and_sources(r: m.MembraneResult) -> None:
             st.latex(r.worked["cp"])
             st.latex(r.worked["rej"])
             st.latex(r.worked["rec"])
+            st.markdown(f"**Permeabilities at the current temperature** (T = {r.temperature:.0f} °C)")
+            st.latex(r.worked["kwT"])
+            st.latex(r.worked["ksT"])
             st.caption(
                 "Single-element solution-diffusion model from IWA 2021, Chapter 9 "
                 "(water flux, salt transport, osmotic build-up), solved by iteration "
@@ -77,6 +80,16 @@ def _equations_and_sources(r: m.MembraneResult) -> None:
                     "Source": st.column_config.TextColumn(width="large"),
                 },
             )
+
+
+def _derivation() -> None:
+    d = m.permeability_derivation()
+    with st.expander("How Kw and Ks are derived (from the element standard test)", expanded=False):
+        st.caption("The permeabilities are not hand-entered — they are computed from the "
+                   "element's standard-test performance on the spec sheet, following the "
+                   "IWA Ch. 9 procedure (25 °C, 32 000 mg/L, 55 bar, 10 % recovery).")
+        for k in ("ccs", "ndps", "jws", "kw", "cps", "ks"):
+            st.latex(d["worked"][k])
 
 
 def _measured_inputs() -> dict:
@@ -140,7 +153,7 @@ def _curve_flux(r, feed, measured):
     ref = pd.DataFrame(m.flux_reference(feed["tds"], feed["temperature"],
                                         feed["feed_flow"], r.fouling),
                        columns=["pressure", "flux"])
-    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3).encode(
+    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3, clip=True).encode(
         x=alt.X("pressure:Q", title="Feed pressure (bar)", scale=_xscale(dom)),
         y=alt.Y("flux:Q", title="Flux (LMH)"))
     layers = _envelope(m.ENVELOPE["max_pressure"][0], dom) + [line]
@@ -162,7 +175,7 @@ def _curve_rejection(r, feed, measured):
     data = [(pf, rj) for pf, rj in m.rejection_reference(
         feed["tds"], feed["temperature"], feed["feed_flow"], r.fouling) if rj is not None]
     ref = pd.DataFrame(data, columns=["pressure", "rejection"])
-    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3).encode(
+    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3, clip=True).encode(
         x=alt.X("pressure:Q", title="Feed pressure (bar)", scale=_xscale(dom)),
         y=alt.Y("rejection:Q", title="Salt rejection (%)",
                 scale=alt.Scale(zero=False)))
@@ -185,7 +198,7 @@ def _curve_flux_vs_temp(r, feed):
     ref = pd.DataFrame(m.flux_vs_temperature(r.feed_pressure, feed["tds"],
                                              feed["feed_flow"], r.fouling),
                        columns=["temp", "flux"])
-    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3).encode(
+    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3, clip=True).encode(
         x=alt.X("temp:Q", title="Feed temperature (°C)", scale=_xscale(dom)),
         y=alt.Y("flux:Q", title="Flux (LMH)"))
     dot = _dot(pd.DataFrame([{"temp": feed["temperature"], "flux": r.flux}]),
@@ -200,7 +213,7 @@ def _curve_flux_vs_salinity(r, feed):
     ref = pd.DataFrame(m.flux_vs_salinity(r.feed_pressure, feed["temperature"],
                                           feed["feed_flow"], r.fouling),
                        columns=["tds", "flux"])
-    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3).encode(
+    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3, clip=True).encode(
         x=alt.X("tds:Q", title="Feed TDS (mg/L)", scale=_xscale(dom),
                 axis=alt.Axis(format=",.0f")),
         y=alt.Y("flux:Q", title="Flux (LMH)"))
@@ -256,6 +269,7 @@ def render(controls: dict, feed: dict) -> None:
     st.divider()
     st.subheader("Where these numbers come from")
     _equations_and_sources(r)
+    _derivation()
 
     st.divider()
     st.subheader("Performance curves — element vs reference")
