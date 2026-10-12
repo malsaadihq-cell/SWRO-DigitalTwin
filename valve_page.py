@@ -1,11 +1,13 @@
-"""Valve-only view — same structure as the pump and membrane pages.
+"""Valve-only view — corrected (back-pressure) framing.
 
-The brine globe valve is a manual throttle with no published Cv curve, so
-this page is really about calibration: a representative equal-% curve, the
-flow law, and a place to drop a measured (hand-wheel position, ΔP, brine
-flow) reading to fit the real characteristic.
+The brine globe valve is a variable resistance: it must pass the brine the
+membrane rejects, and in doing so it develops a back-pressure that sets the
+recovery. Inputs are the opening and the brine flow; the output is the
+back-pressure. The page is about calibrating the representative curve.
 """
 from __future__ import annotations
+
+import math
 
 import altair as alt
 import pandas as pd
@@ -19,24 +21,23 @@ MEASURED = "#6A4C93"
 INK = "#201E1A"
 GRID = "#D7D1C4"
 SHADE = "#B4553A"
+RATING = V.ENVELOPE["max_pressure"][0]
 
 
-def _choke_onset() -> float:
-    """ΔP above which the valve cavitates (derived from the choke condition)."""
-    fl = V.v("FL")
-    return fl ** 2 * (V.P_ATM - V.FF * V.PV) / (1.0 - fl ** 2)
+def _fmt(x, nd=1):
+    return "∞" if not math.isfinite(x) else f"{x:.{nd}f}"
 
 
 def _kpi_row(r: V.ValveResult) -> None:
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Brine flow Qb (m³/h)", f"{r.brine_flow:.2f}",
-              help="Q = 0.865 · Cv · √(ΔP_eff / SG).")
+    c1.metric("Back-pressure ΔP (bar)", _fmt(r.delta_p),
+              help="ΔP = (Q / (0.865·Cv))²·SG. This sets the system pressure and the recovery.")
     c2.metric("Cv at this opening", f"{r.cv:.2f}",
               help="Equal-% characteristic: Cv = Cv_max · R^(x−1).")
-    c3.metric("Effective ΔP (bar)", f"{r.dp_eff:.1f}",
-              help="Pressure drop actually driving flow (capped by the choke limit).")
-    c4.metric("Flow condition", "Cavitating" if r.choked else "OK",
-              help="Choked flow when ΔP exceeds the FL-based choke limit.")
+    c3.metric("Valve resistance", _fmt(r.resistance, 2),
+              help="R in ΔP = R·Q². Rises steeply as you close the valve.")
+    c4.metric("Flow condition", "Cavitating" if r.cavitating else "OK",
+              help="Cavitates when the back-pressure exceeds the FL-based onset.")
 
 
 def _equations_and_sources(r: V.ValveResult) -> None:
@@ -45,15 +46,13 @@ def _equations_and_sources(r: V.ValveResult) -> None:
         with left:
             st.markdown("**Laws used — with the current values plugged in**")
             st.latex(r.worked["cv"])
-            st.latex(r.worked["choke"])
-            st.latex(r.worked["q"])
+            st.latex(r.worked["dp"])
             st.caption(
-                "Liquid flow through a control valve, Q = Cv·√(ΔP/SG) with an "
-                "equal-percentage characteristic and an FL-based choke limit "
-                "(standard control-valve references). The valve discharges to "
-                "~atmosphere, so ΔP is the upstream brine pressure. Cv and the "
-                "characteristic are representative — the real curve comes from "
-                "calibration."
+                "The valve is a variable resistance: the Cv equation Q = Cv·√(ΔP/SG) "
+                "is solved for the back-pressure ΔP it must develop to pass the brine "
+                "flow the membrane rejects. Opening sets Cv through the equal-% "
+                "characteristic. Cv and the shape are representative — the real curve "
+                "comes from calibration."
             )
         with right:
             st.markdown("**Parameters — what each value is and where it comes from**")
@@ -73,27 +72,31 @@ def _equations_and_sources(r: V.ValveResult) -> None:
 
 def _measured_inputs() -> dict:
     with st.expander("Compare with a measured field reading (optional)", expanded=False):
-        st.caption("Enter a real reading from the plant — a hand-wheel position with "
-                   "its brine flow and pressure drop. Leave blank until you have one.")
+        st.caption("Enter a real reading from the plant — a hand-wheel position with the "
+                   "brine flow it passes and the back-pressure. Leave blank until you have one.")
         c1, c2, c3 = st.columns(3)
         op = c1.number_input("Valve opening (% travel)", value=None, min_value=0.0,
                             max_value=100.0, step=1.0, placeholder="—")
-        dp = c2.number_input("Pressure drop (bar)", value=None, min_value=0.0,
-                            step=0.5, placeholder="—")
-        qb = c3.number_input("Brine flow (m³/h)", value=None, min_value=0.0,
+        qb = c2.number_input("Brine flow (m³/h)", value=None, min_value=0.0,
                             step=0.1, placeholder="—")
+        dp = c3.number_input("Back-pressure (bar)", value=None, min_value=0.0,
+                            step=0.5, placeholder="—")
     out = {}
     if op is not None:
         out["opening"] = op
-    if dp is not None:
-        out["delta_p"] = dp
     if qb is not None:
         out["brine_flow"] = qb
+    if dp is not None:
+        out["back_pressure"] = dp
     return out
 
 
 def _xscale(dom):
     return alt.Scale(domain=dom, nice=False)
+
+
+def _yscale(dom):
+    return alt.Scale(domain=dom, nice=False, clamp=True)
 
 
 def _dot(df, x, y, color, shape, tips):
@@ -113,43 +116,51 @@ def _style(layer, title):
                             tickColor=INK))
 
 
+def _overpressure_band(ydom):
+    """Shade the region above the Class 600 rating."""
+    band = alt.Chart(pd.DataFrame({"y": [RATING], "y2": [ydom[1]]})).mark_rect(
+        color=SHADE, opacity=0.07).encode(y=alt.Y("y:Q"), y2="y2:Q")
+    rule = alt.Chart(pd.DataFrame({"y": [RATING]})).mark_rule(
+        color=SHADE, strokeDash=[4, 4], opacity=0.6).encode(y=alt.Y("y:Q"))
+    return [band, rule]
+
+
 def _curve_char(r, measured):
-    dom = [0, 100]
-    ref = pd.DataFrame(V.flow_vs_opening(r.delta_p, r.sg), columns=["opening", "flow"])
+    xdom, ydom = [12, 100], [0, 110]
+    data = [(o, d) for o, d in V.bp_vs_opening(r.brine_flow, r.sg, lo=xdom[0]) if d is not None]
+    ref = pd.DataFrame(data, columns=["opening", "dp"])
     line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3).encode(
-        x=alt.X("opening:Q", title="Valve opening (% travel)", scale=_xscale(dom)),
-        y=alt.Y("flow:Q", title="Brine flow (m³/h)"))
-    layers = [line, _dot(pd.DataFrame([{"opening": r.opening, "flow": r.brine_flow}]),
-                         "opening", "flow", MODEL, "circle",
-                         [alt.Tooltip("opening:Q", format=".0f", title="opening %"),
-                          alt.Tooltip("flow:Q", format=".2f", title="brine flow")])]
-    if measured.get("opening") is not None and measured.get("brine_flow"):
+        x=alt.X("opening:Q", title="Valve opening (% travel)", scale=_xscale(xdom)),
+        y=alt.Y("dp:Q", title="Back-pressure (bar)", scale=_yscale(ydom)))
+    layers = _overpressure_band(ydom) + [line]
+    if math.isfinite(r.delta_p):
+        layers.append(_dot(pd.DataFrame([{"opening": r.opening, "dp": r.delta_p}]),
+                           "opening", "dp", MODEL, "circle",
+                           [alt.Tooltip("opening:Q", format=".0f", title="opening %"),
+                            alt.Tooltip("dp:Q", format=".1f", title="back-pressure")]))
+    if measured.get("opening") is not None and measured.get("back_pressure"):
         layers.append(_dot(pd.DataFrame([{"opening": measured["opening"],
-                                          "flow": measured["brine_flow"]}]),
-                           "opening", "flow", MEASURED, "diamond",
+                                          "dp": measured["back_pressure"]}]),
+                           "opening", "dp", MEASURED, "diamond",
                            [alt.Tooltip("opening:Q", format=".0f", title="measured opening"),
-                            alt.Tooltip("flow:Q", format=".2f", title="measured flow")]))
-    return _style(alt.layer(*layers), "Brine flow vs opening (equal-%)  ·  representative")
+                            alt.Tooltip("dp:Q", format=".1f", title="measured ΔP")]))
+    return _style(alt.layer(*layers), "Back-pressure vs opening  ·  representative")
 
 
-def _curve_dp(r):
-    dom = [0, 80]
-    onset = _choke_onset()
-    ref = pd.DataFrame(V.flow_vs_dp(r.opening, r.sg, lo=dom[0], hi=dom[1]),
-                       columns=["dp", "flow"])
-    band = alt.Chart(pd.DataFrame({"x": [onset], "x2": [dom[1]]})).mark_rect(
-        color=SHADE, opacity=0.06).encode(x=alt.X("x:Q", scale=_xscale(dom)), x2="x2:Q")
-    rule = alt.Chart(pd.DataFrame({"x": [onset]})).mark_rule(
-        color=SHADE, strokeDash=[4, 4], opacity=0.5).encode(x=alt.X("x:Q", scale=_xscale(dom)))
+def _curve_q(r):
+    xdom, ydom = [0, 15], [0, 110]
+    data = [(q, d) for q, d in V.bp_vs_brineflow(r.opening, r.sg, lo=xdom[0], hi=xdom[1]) if d is not None]
+    ref = pd.DataFrame(data, columns=["q", "dp"])
     line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3).encode(
-        x=alt.X("dp:Q", title="Pressure drop (bar)", scale=_xscale(dom)),
-        y=alt.Y("flow:Q", title="Brine flow (m³/h)"))
-    dot = _dot(pd.DataFrame([{"dp": r.delta_p, "flow": r.brine_flow}]), "dp", "flow",
-               MODEL, "circle",
-               [alt.Tooltip("dp:Q", format=".1f", title="ΔP"),
-                alt.Tooltip("flow:Q", format=".2f", title="brine flow")])
-    return _style(alt.layer(band, rule, line, dot),
-                  "Brine flow vs ΔP  (shaded = cavitating region)")
+        x=alt.X("q:Q", title="Brine flow (m³/h)", scale=_xscale(xdom)),
+        y=alt.Y("dp:Q", title="Back-pressure (bar)", scale=_yscale(ydom)))
+    layers = _overpressure_band(ydom) + [line]
+    if math.isfinite(r.delta_p):
+        layers.append(_dot(pd.DataFrame([{"q": r.brine_flow, "dp": r.delta_p}]),
+                           "q", "dp", MODEL, "circle",
+                           [alt.Tooltip("q:Q", format=".2f", title="brine flow"),
+                            alt.Tooltip("dp:Q", format=".1f", title="back-pressure")]))
+    return _style(alt.layer(*layers), "Back-pressure vs brine flow  (ΔP = R·Q², at this opening)")
 
 
 def _interpretation(r, measured):
@@ -162,17 +173,18 @@ def _interpretation(r, measured):
 def _assumptions():
     with st.expander("Assumptions & limits", expanded=False):
         st.markdown(
+            "- **The valve is a resistance**: inputs are the opening and the brine flow "
+            "it must pass; the output is the back-pressure it develops.\n"
             "- **Equal-percentage characteristic** assumed (globe inherent); the real "
             "curve comes from calibration.\n"
             "- **Cv_max is representative** for a 1½″ globe valve — a manual BS 1873 "
-            "valve has no published Cv curve.\n"
-            "- **Opening = fraction of hand-wheel travel** (manual valve); on site, "
-            "record the number of turns.\n"
-            "- The brine **discharges to ~atmosphere**, so ΔP ≈ the upstream brine pressure.\n"
-            "- **Choked flow** uses a representative FL; at operating pressures the valve "
-            "cavitates — the body is CF8M stainless for exactly this erosion.\n"
-            "- The valve is **oversized for the duty** (Cv_max ≫ the ~1.5 Cv needed), so "
-            "it runs near the bottom of its travel.\n"
+            "valve has no published curve.\n"
+            "- **Opening = fraction of hand-wheel travel** (manual valve).\n"
+            "- The brine **discharges to ~atmosphere**, so the back-pressure is the "
+            "upstream brine pressure.\n"
+            "- **Fully open → ~0 back-pressure** → the system cannot build pressure and "
+            "produces nothing; the throttling is what makes the RO work.\n"
+            "- At operating pressures the valve **cavitates** (CF8M is chosen for the erosion).\n"
             "- Brine specific gravity ≈ 1.03."
         )
 
@@ -180,7 +192,7 @@ def _assumptions():
 def render(controls: dict, feed: dict) -> None:
     r = V.simulate(
         opening_pct=controls.get("valve_opening", 60.0),
-        delta_p=controls.get("valve_dp", 50.0),
+        brine_flow=controls.get("brine_flow", 9.5),
     )
 
     if r.warnings:
@@ -198,13 +210,14 @@ def render(controls: dict, feed: dict) -> None:
     measured = _measured_inputs()
     st.markdown(
         "**Legend** — :blue[━ line] representative curve  ·  :orange[● amber] model "
-        "point  ·  :violet[◆ purple] your measured reading  ·  shaded = cavitating region"
+        "point  ·  :violet[◆ purple] your measured reading  ·  shaded = above the "
+        "Class 600 rating"
     )
     a1, a2 = st.columns(2)
     a1.altair_chart(_curve_char(r, measured), theme=None, width='stretch')
-    a2.altair_chart(_curve_dp(r), theme=None, width='stretch')
-    st.caption("Enter a measured point to fit Cv_max and the characteristic to your "
-               "actual valve — the line is only a representative starting shape.")
+    a2.altair_chart(_curve_q(r), theme=None, width='stretch')
+    st.caption("Open the valve → back-pressure falls toward zero; close it → it climbs "
+               "(and can exceed the valve rating). Enter a measured point to fit the real curve.")
 
     st.divider()
     _interpretation(r, measured)
