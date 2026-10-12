@@ -47,12 +47,18 @@ def _equations_and_sources(r: V.ValveResult) -> None:
             st.markdown("**Laws used — with the current values plugged in**")
             st.latex(r.worked["cv"])
             st.latex(r.worked["dp"])
+            st.latex(r.worked["cav"])
+            onset = V.cavitation_onset()
+            status = ("cavitating" if r.cavitating else "no cavitation")
+            dp_txt = _fmt(r.delta_p)
             st.caption(
                 "The valve is a variable resistance: the Cv equation Q = Cv·√(ΔP/SG) "
                 "is solved for the back-pressure ΔP it must develop to pass the brine "
                 "flow the membrane rejects. Opening sets Cv through the equal-% "
-                "characteristic. Cv and the shape are representative — the real curve "
-                "comes from calibration."
+                "characteristic. Cavitation starts once ΔP passes ΔP_onset = "
+                "FL²(P₁ − FF·Pv)/(1 − FL²): here ΔP = "
+                f"{dp_txt} bar vs onset ≈ {onset:.1f} bar → {status}. "
+                "Cv and the shape are representative — the real curve comes from calibration."
             )
         with right:
             st.markdown("**Parameters — what each value is and where it comes from**")
