@@ -149,10 +149,35 @@ def _assumptions():
 
 
 def render(controls: dict, feed: dict) -> None:
-    freq = controls.get("frequency", 48.0)
-    opening = controls.get("valve_opening", 25.0)
+    from core import modes as M
+
+    freq_manual = controls.get("frequency", 48.0)
+    opening_manual = controls.get("valve_opening", 25.0)
     tds = feed.get("tds", 41000.0)
     temp = feed.get("temperature", 28.0)
+
+    st.subheader("Operating mode")
+    mode = st.segmented_control("mode", M.MODE_NAMES, default="Manual",
+                                label_visibility="collapsed") or "Manual"
+    target_pct = None
+    if mode == "Target":
+        target_pct = st.number_input("Target recovery (%)", min_value=1.0,
+                                     max_value=20.0, value=10.0, step=0.5)
+    with st.expander("What the modes do", expanded=False):
+        for name in M.MODE_NAMES:
+            st.markdown(f"**{name}** — {M.GOALS[name]}")
+
+    note = ""
+    if mode == "Manual":
+        freq, opening = freq_manual, opening_manual
+    else:
+        freq, opening, _, note = M.recommend(mode, tds, temp, target_pct or 10.0)
+        msg = (f"**{mode}** → recommended setpoints: VFD **{freq:.0f} Hz**, valve "
+               f"**{opening:.0f}% open**.  _{M.GOALS[mode]}_  "
+               "(The sidebar knobs are overridden in this mode.)")
+        if note:
+            msg += f"\n\n{note}"
+        st.info(msg)
 
     r = S.simulate(freq, opening, tds, temp)
 
