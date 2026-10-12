@@ -46,40 +46,49 @@ def _kpi_row(r: m.MembraneResult) -> None:
 
 def _equations_and_sources(r: m.MembraneResult) -> None:
     with st.expander("Equations, substitutions & sources", expanded=True):
-        left, right = st.columns([1, 1])
-        with left:
-            st.markdown("**Laws used — with the current values plugged in**")
-            st.latex(r.worked["cc"])
-            st.latex(r.worked["ndp"])
-            st.latex(r.worked["flux"])
-            st.latex(r.worked["qp"])
-            st.latex(r.worked["cp"])
-            st.latex(r.worked["rej"])
-            st.latex(r.worked["rec"])
-            st.markdown(f"**Permeabilities at the current temperature** (T = {r.temperature:.0f} °C)")
-            st.latex(r.worked["kwT"])
-            st.latex(r.worked["ksT"])
-            st.caption(
-                "Single-element solution-diffusion model from IWA 2021, Chapter 9 "
-                "(water flux, salt transport, osmotic build-up), solved by iteration "
-                "on the recovery. Only the element-level laws are used; the book's "
-                "72-element plant example is not. The exact page for every value is "
-                "in the table."
-            )
-        with right:
-            st.markdown("**Parameters — what each value is and where it comes from**")
-            rows = [
-                {"Parameter": k, "What it is": s.what,
-                 "Value": f"{s.value:g}", "Unit": s.unit, "Source": s.source}
-                for k, s in m.PARAMS.items()
-            ]
-            st.dataframe(
-                pd.DataFrame(rows), hide_index=True, width='stretch',
-                column_config={
-                    "What it is": st.column_config.TextColumn(width="medium"),
-                    "Source": st.column_config.TextColumn(width="large"),
-                },
-            )
+        st.markdown("**Laws used — with the current values plugged in**")
+
+        st.markdown("*Osmotic build-up & driving pressure*")
+        st.latex(r.worked["cc"])
+        st.latex(r.worked["ndp"])
+
+        st.markdown("*Water transport*")
+        st.latex(r.worked["flux"])
+        st.latex(r.worked["qp"])
+
+        st.markdown("*Salt transport*")
+        st.latex(r.worked["cp"])
+        st.latex(r.worked["rej"])
+
+        st.markdown("*Recovery*")
+        st.latex(r.worked["rec"])
+
+        st.markdown(f"*Permeabilities at the current temperature  (T = {r.temperature:.0f} \u00b0C)*")
+        st.latex(r.worked["kwT"])
+        st.latex(r.worked["ksT"])
+
+        st.caption(
+            "Single-element solution-diffusion model from IWA 2021, Chapter 9 "
+            "(osmotic build-up, water flux, salt transport), solved by iteration on "
+            "the recovery. Only the element-level laws are used; the book\u2019s "
+            "72-element plant example is not. The exact page for every value is in "
+            "the table below."
+        )
+
+        st.divider()
+        st.markdown("**Parameters \u2014 what each value is and where it comes from**")
+        rows = [
+            {"Parameter": k, "What it is": s_.what,
+             "Value": f"{s_.value:g}", "Unit": s_.unit, "Source": s_.source}
+            for k, s_ in m.PARAMS.items()
+        ]
+        st.dataframe(
+            pd.DataFrame(rows), hide_index=True, width='stretch',
+            column_config={
+                "What it is": st.column_config.TextColumn(width="medium"),
+                "Source": st.column_config.TextColumn(width="large"),
+            },
+        )
 
 
 def _derivation() -> None:
