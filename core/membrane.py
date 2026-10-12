@@ -38,12 +38,14 @@ class Spec:
 PARAMS: dict[str, Spec] = {
     "area": Spec(40.9, "m²",
                  "Active membrane area of the element", ESS + " (also Ch. 9, Table 3)"),
-    "Kw25": Spec(0.99, "L/m²·bar·h",
-                 "Water permeability at 25 °C, from the element standard test",
-                 CH9 + ", p. 250–251 (derived from the ESS)"),
-    "Ks25": Spec(0.056, "L/m²·h",
-                 "Salt permeability at 25 °C, from the element standard test",
-                 CH9 + ", p. 251–252 (derived from the ESS)"),
+    "Pfs": Spec(55.0, "bar",
+                "Applied pressure in the element standard test", ESS),
+    "Cfs": Spec(32000.0, "mg/L",
+                "Feed NaCl concentration in the standard test", ESS),
+    "Re_std": Spec(0.10, "—",
+                   "Recovery in the standard test", ESS),
+    "Qws": Spec(1.14, "m³/h",
+                "Permeate flow in the standard test (27.3 m³/d)", ESS),
     "SR": Spec(0.998, "—",
                "Nominal salt rejection used for the brine-concentration build-up", ESS),
     "osmotic_coeff": Spec(0.8, "bar per 1000 mg/L",
@@ -63,6 +65,42 @@ PARAMS: dict[str, Spec] = {
 
 def p(key: str) -> float:
     return PARAMS[key].value
+
+
+def permeability_derivation() -> dict:
+    """Compute Kw and Ks at 25 °C from the element standard-test performance
+    on the spec sheet (IWA Ch. 9, p. 250–252). They are derived, not hand-entered."""
+    Pfs, Cfs, Re, SR = p("Pfs"), p("Cfs"), p("Re_std"), p("SR")
+    A, dPe, oc, ppf, Qws = p("area"), p("dPe"), p("osmotic_coeff"), p("pp_factor"), p("Qws")
+    Ccs = Cfs * (1 - Re * (1 - SR)) / (1 - Re)
+    pifc = (Cfs * oc / 1000 + Ccs * oc / 1000) / 2
+    dpi = pifc - ppf * pifc
+    NDPs = Pfs - dPe / 2 - dpi
+    Jws = Qws * 1000.0 / A
+    Kw25 = Jws / NDPs
+    Cfcs = (Cfs + Ccs) / 2
+    Cps = Cfcs * (1 - SR)
+    Ks25 = Jws * Cps / Cfcs
+    worked = {
+        "ccs": (rf"C_{{cs}} = C_{{fs}}\frac{{1-R_e(1-SR)}}{{1-R_e}} = {Cfs:.0f}\,"
+                rf"\frac{{1-0.1(1-0.998)}}{{0.9}} = {Ccs:.0f}\ \mathrm{{mg/L}}"),
+        "ndps": (rf"NDP_s = P_{{fs}}-\tfrac{{\Delta P_e}}{{2}}-\Delta\pi = {Pfs:.0f}"
+                 rf"-0.1-{dpi:.1f} = {NDPs:.1f}\ \mathrm{{bar}}"),
+        "jws": (rf"J_{{ws}} = Q_{{ws}}\cdot 1000/A = {Qws:.2f}\cdot 1000/{A:.1f}"
+                rf" = {Jws:.1f}\ \mathrm{{L/m^2 h}}"),
+        "kw": (rf"K_w = J_{{ws}}/NDP_s = {Jws:.1f}/{NDPs:.1f} = {Kw25:.3f}"
+               rf"\ \mathrm{{L/m^2\,bar\,h}}"),
+        "cps": (rf"C_{{ps}} = C_{{fcs}}(1-SR) = {Cfcs:.0f}\times 0.002 = {Cps:.1f}"
+                rf"\ \mathrm{{mg/L}}"),
+        "ks": (rf"K_s = J_{{ws}}\,C_{{ps}}/C_{{fcs}} = {Jws:.1f}\times {Cps:.1f}/{Cfcs:.0f}"
+               rf" = {Ks25:.3f}\ \mathrm{{L/m^2 h}}"),
+    }
+    return dict(Kw25=Kw25, Ks25=Ks25, worked=worked)
+
+
+_DERIV = permeability_derivation()
+KW25 = _DERIV["Kw25"]
+KS25 = _DERIV["Ks25"]
 
 
 # --- operating envelope (all from the ESS) ---------------------------
@@ -97,12 +135,12 @@ def brine_conc(feed_tds: float, recovery: float) -> float:
 def kw_at(temperature: float, fouling: float) -> float:
     """Water permeability at temperature, with a fouling multiplier
     (1.0 = clean): Kw(T) = Kw25 · fouling · 1.03^(T−25)  (CH9 p. 252)."""
-    return p("Kw25") * fouling * p("temp_coeff") ** (temperature - 25.0)
+    return KW25 * fouling * p("temp_coeff") ** (temperature - 25.0)
 
 
 def ks_at(temperature: float) -> float:
     """Salt permeability at temperature: Ks(T) = Ks25 · 1.03^(T−25)."""
-    return p("Ks25") * p("temp_coeff") ** (temperature - 25.0)
+    return KS25 * p("temp_coeff") ** (temperature - 25.0)
 
 
 # ---------------------------------------------------------------------
@@ -200,6 +238,10 @@ def simulate(feed_pressure: float, feed_tds: float, temperature: float,
         "rej": (rf"\text{{rejection}} = 1 - C_p/C_f = 1 - {Cp:.1f}/{feed_tds:.0f}"
                 rf" = {rejection*100:.2f}\%"),
         "rec": (rf"R = Q_p/Q_f = {Qp:.2f}/{feed_flow:.2f} = {recovery*100:.1f}\%"),
+        "kwT": (rf"K_w(T) = K_{{w,25}}\cdot 1.03^{{T-25}}\cdot h = {KW25:.3f}\cdot 1.03^{{{temperature:.0f}-25}}"
+                rf"\cdot {fouling:.2f} = {Kw:.3f}\ \mathrm{{L/m^2\,bar\,h}}"),
+        "ksT": (rf"K_s(T) = K_{{s,25}}\cdot 1.03^{{T-25}} = {KS25:.3f}\cdot 1.03^{{{temperature:.0f}-25}}"
+                rf" = {Ks:.3f}\ \mathrm{{L/m^2 h}}"),
     }
 
     result = MembraneResult(
@@ -325,7 +367,7 @@ def rejection_reference(feed_tds, temperature, feed_flow, fouling=1.0,
     for i in range(points):
         pf = lo + (hi - lo) * i / (points - 1)
         r = simulate(pf, feed_tds, temperature, feed_flow, fouling)
-        out.append((pf, r.rejection * 100.0 if r.flux > 0 else None))
+        out.append((pf, r.rejection * 100.0 if r.flux > 2.0 else None))
     return out
 
 
