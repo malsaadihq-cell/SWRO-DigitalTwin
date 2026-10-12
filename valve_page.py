@@ -96,7 +96,9 @@ def _xscale(dom):
 
 
 def _yscale(dom):
-    return alt.Scale(domain=dom, nice=False, clamp=True)
+    # clamp=False so the steep low-opening part is clipped cleanly at the top
+    # edge instead of being pinned into a flat line.
+    return alt.Scale(domain=dom, nice=False, clamp=False)
 
 
 def _dot(df, x, y, color, shape, tips):
@@ -116,23 +118,27 @@ def _style(layer, title):
                             tickColor=INK))
 
 
-def _overpressure_band(ydom):
-    """Shade the region above the Class 600 rating."""
-    band = alt.Chart(pd.DataFrame({"y": [RATING], "y2": [ydom[1]]})).mark_rect(
+def _bands(ydom):
+    """Over-rating shade (Class 600) + a dashed cavitation-onset line, so the
+    basis of cavitation is visible: above the onset the valve cavitates."""
+    onset = V.cavitation_onset()
+    over = alt.Chart(pd.DataFrame({"y": [RATING], "y2": [ydom[1]]})).mark_rect(
         color=SHADE, opacity=0.07).encode(y=alt.Y("y:Q"), y2="y2:Q")
-    rule = alt.Chart(pd.DataFrame({"y": [RATING]})).mark_rule(
+    rating_rule = alt.Chart(pd.DataFrame({"y": [RATING]})).mark_rule(
         color=SHADE, strokeDash=[4, 4], opacity=0.6).encode(y=alt.Y("y:Q"))
-    return [band, rule]
+    cav_rule = alt.Chart(pd.DataFrame({"y": [onset]})).mark_rule(
+        color="#8A8578", strokeDash=[2, 3], opacity=0.8).encode(y=alt.Y("y:Q"))
+    return [over, rating_rule, cav_rule]
 
 
 def _curve_char(r, measured):
-    xdom, ydom = [12, 100], [0, 110]
+    xdom, ydom = [15, 100], [0, 110]
     data = [(o, d) for o, d in V.bp_vs_opening(r.brine_flow, r.sg, lo=xdom[0]) if d is not None]
     ref = pd.DataFrame(data, columns=["opening", "dp"])
-    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3).encode(
+    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3, clip=True).encode(
         x=alt.X("opening:Q", title="Valve opening (% travel)", scale=_xscale(xdom)),
         y=alt.Y("dp:Q", title="Back-pressure (bar)", scale=_yscale(ydom)))
-    layers = _overpressure_band(ydom) + [line]
+    layers = _bands(ydom) + [line]
     if math.isfinite(r.delta_p):
         layers.append(_dot(pd.DataFrame([{"opening": r.opening, "dp": r.delta_p}]),
                            "opening", "dp", MODEL, "circle",
@@ -151,10 +157,10 @@ def _curve_q(r):
     xdom, ydom = [0, 15], [0, 110]
     data = [(q, d) for q, d in V.bp_vs_brineflow(r.opening, r.sg, lo=xdom[0], hi=xdom[1]) if d is not None]
     ref = pd.DataFrame(data, columns=["q", "dp"])
-    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3).encode(
+    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3, clip=True).encode(
         x=alt.X("q:Q", title="Brine flow (m³/h)", scale=_xscale(xdom)),
         y=alt.Y("dp:Q", title="Back-pressure (bar)", scale=_yscale(ydom)))
-    layers = _overpressure_band(ydom) + [line]
+    layers = _bands(ydom) + [line]
     if math.isfinite(r.delta_p):
         layers.append(_dot(pd.DataFrame([{"q": r.brine_flow, "dp": r.delta_p}]),
                            "q", "dp", MODEL, "circle",
@@ -210,8 +216,9 @@ def render(controls: dict, feed: dict) -> None:
     measured = _measured_inputs()
     st.markdown(
         "**Legend** — :blue[━ line] representative curve  ·  :orange[● amber] model "
-        "point  ·  :violet[◆ purple] your measured reading  ·  shaded = above the "
-        "Class 600 rating"
+        "point  ·  :violet[◆ purple] your measured reading  ·  dotted grey = "
+        "cavitation onset (~4 bar; above it the valve cavitates)  ·  shaded = above "
+        "the Class 600 rating"
     )
     a1, a2 = st.columns(2)
     a1.altair_chart(_curve_char(r, measured), theme=None, width='stretch')
