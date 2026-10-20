@@ -58,6 +58,11 @@ MODES = {
         charts=["flux_vs_p", "sec_vs_rec", "rej_vs_p"],
         note="Both knobs are live. The model solves the operating point and every KPI.",
     ),
+    "Validation": dict(
+        controls=[], kpis=[], charts=[],
+        note="Model vs plant: enter measured test runs and see the gap per KPI. "
+             "No parameter is adjusted.",
+    ),
     "Pump only": dict(
         controls=["frequency", "outlet_pressure", "health_factor"],
         kpis=["feed_flow", "shaft_power"],
@@ -130,7 +135,7 @@ def sidebar() -> tuple[str, dict, dict]:
     ) or "Full system"
     st.sidebar.caption(MODES[mode]["note"])
 
-    if mode == "Architecture":
+    if mode in ("Architecture", "Validation"):
         return mode, {}, {}
 
     keys = MODES[mode]["controls"]
@@ -257,6 +262,10 @@ def main() -> None:
     if mode == "Full system":
         import system_page
         system_page.render(controls, feed)
+        return
+    if mode == "Validation":
+        import validation_page
+        validation_page.render(controls, feed)
         return
 
     # Unbuilt blocks still show the interface foundation (empty state).

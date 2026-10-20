@@ -44,39 +44,84 @@ def _kpi_row(r: m.MembraneResult) -> None:
               help="Feed-concentrate osmotic pressure the pressure must overcome.")
 
 
-def _equations_and_sources(r: m.MembraneResult) -> None:
-    with st.expander("Equations, substitutions & sources", expanded=True):
-        st.markdown("**Laws used — with the current values plugged in**")
+def _latex(worked: dict, keys) -> None:
+    for k in keys:
+        st.latex(worked[k])
 
-        st.markdown("*Osmotic build-up & driving pressure*")
-        st.latex(r.worked["cc"])
-        st.latex(r.worked["ndp"])
 
-        st.markdown("*Water transport*")
-        st.latex(r.worked["flux"])
-        st.latex(r.worked["qp"])
+def _steps(r: m.MembraneResult) -> None:
+    """The seven CH9 design steps (report Ch. 3, Section 3.3), each with the
+    current values substituted."""
+    w = r.step_worked
+    st.caption(
+        "Single-element solution-diffusion model from IWA 2021, Chapter 9, laid out "
+        "as the seven steps of report Chapter 3. Only the element-level laws are "
+        "used; the book\u2019s 72-element plant example is not. Steps 1, 2 and 4 are "
+        "the design path (flux & recovery \u2192 pressure) evaluated at the solved "
+        "point; Steps 5\u20137 are what the model actually solves at your feed pressure."
+    )
 
-        st.markdown("*Salt transport*")
-        st.latex(r.worked["cp"])
-        st.latex(r.worked["rej"])
+    with st.expander("Step 1 — Preliminary concentrations", expanded=False):
+        st.caption(f"IWA Ch. 9, p. 249 · evaluated at the solved recovery "
+                   f"R = {r.recovery*100:.1f} % and feed TDS {r.feed_tds:,.0f} mg/L.")
+        _latex(w["step1"], ("cc", "cfc", "cp"))
 
-        st.markdown("*Recovery*")
-        st.latex(r.worked["rec"])
+    with st.expander("Step 2 — Flux and flow per element", expanded=False):
+        st.caption("IWA Ch. 9, p. 250 · the solved flux is taken as J_avg. The plant is "
+                   "one element, so the number-of-elements and pressure-vessel "
+                   "calculations reduce to 1 and are omitted.")
+        _latex(w["step2"], ("qe",))
 
-        st.markdown(f"*Permeabilities at the current temperature  (T = {r.temperature:.0f} \u00b0C)*")
-        st.latex(r.worked["kwT"])
-        st.latex(r.worked["ksT"])
+    with st.expander("Step 3 — Membrane permeabilities (Kw, Ks) from standard test",
+                     expanded=False):
+        st.caption("IWA Ch. 9, p. 250–252 · the permeabilities are not hand-entered — "
+                   "they are computed from the element's standard-test performance on the "
+                   "spec sheet (25 °C, 32 000 mg/L, 55 bar, 10 % recovery).")
+        _latex(w["step3"], ("ccs", "ndps", "jws", "kw", "cps", "ks"))
 
-        st.caption(
-            "Single-element solution-diffusion model from IWA 2021, Chapter 9 "
-            "(osmotic build-up, water flux, salt transport), solved by iteration on "
-            "the recovery. Only the element-level laws are used; the book\u2019s "
-            "72-element plant example is not. The exact page for every value is in "
-            "the table below."
-        )
+    with st.expander("Step 4 — Preliminary feed pressure", expanded=False):
+        st.caption("IWA Ch. 9, p. 253–254 · feed pressure needed for the chosen flux. "
+                   "At the solved flux it returns the applied feed pressure "
+                   f"({r.feed_pressure:.1f} bar) — Step 4 is the inverse of Step 5.")
+        _latex(w["step4"], ("ndp", "cc", "pi_f", "pi_c", "pi_fc", "dpi", "pfeed"))
 
-        st.divider()
-        st.markdown("**Parameters \u2014 what each value is and where it comes from**")
+    with st.expander("Step 5 — Flows, recovery and concentration-polarisation β",
+                     expanded=True):
+        st.caption("IWA Ch. 9, p. 254–258 · solved by iteration on the recovery: assume R "
+                   "→ Cc, Δπ, NDP → J, Qp → new R, repeat until it settles. β and Qc/Qp "
+                   "are checks (β < 1.2, Qc/Qp > 5).")
+        st.markdown(f"*Water permeability at T = {r.temperature:.0f} \u00b0C*")
+        _latex(w["step5"], ("kwT",))
+        st.markdown("*Iteration result*")
+        _latex(w["step5"], ("cc", "ndp", "flux", "qp", "rec", "qc"))
+        st.markdown("*Checks*")
+        _latex(w["step5"], ("beta", "ratio"))
+
+    with st.expander("Step 6 — Permeate quality (constant SR vs flux effect)", expanded=False):
+        st.caption("IWA Ch. 9, p. 259 · two formulations side by side.")
+        _latex(w["step6"], ("ksT",))
+        c1, c2 = st.columns(2)
+        with c1:
+            st.metric("Constant SR — Cp (mg/L)", f"{r.permeate_tds_const_sr:.1f}")
+            st.latex(w["step6"]["cp_const"])
+        with c2:
+            st.metric("Flux effect — Cp (mg/L) · used", f"{r.permeate_tds:.1f}")
+            st.latex(w["step6"]["cp_flux"])
+        _latex(w["step6"], ("rej",))
+        st.caption("The constant-SR form ignores the operating point. The flux-effect form "
+                   "follows solution-diffusion: the salt that diffuses across (Ks) is "
+                   "diluted by the water flux J, so permeate quality worsens at low "
+                   "pressure and high temperature — that is why simulate() uses it.")
+
+    with st.expander("Step 7 — Cross-flow velocity", expanded=False):
+        st.caption("IWA Ch. 9, p. 261 · spacer geometry after Vrouwenvelder (2009). "
+                   "Report Table 3.9 gives 0.22 m/s at the design point.")
+        _latex(w["step7"], ("w", "aeff", "vfc"))
+
+
+def _parameters() -> None:
+    with st.expander("Parameters \u2014 what each value is and where it comes from",
+                     expanded=False):
         rows = [
             {"Parameter": k, "What it is": s_.what,
              "Value": f"{s_.value:g}", "Unit": s_.unit, "Source": s_.source}
@@ -89,16 +134,6 @@ def _equations_and_sources(r: m.MembraneResult) -> None:
                 "Source": st.column_config.TextColumn(width="large"),
             },
         )
-
-
-def _derivation() -> None:
-    d = m.permeability_derivation()
-    with st.expander("How Kw and Ks are derived (from the element standard test)", expanded=False):
-        st.caption("The permeabilities are not hand-entered — they are computed from the "
-                   "element's standard-test performance on the spec sheet, following the "
-                   "IWA Ch. 9 procedure (25 °C, 32 000 mg/L, 55 bar, 10 % recovery).")
-        for k in ("ccs", "ndps", "jws", "kw", "cps", "ks"):
-            st.latex(d["worked"][k])
 
 
 def _measured_inputs() -> dict:
@@ -277,8 +312,8 @@ def render(controls: dict, feed: dict) -> None:
 
     st.divider()
     st.subheader("Where these numbers come from")
-    _equations_and_sources(r)
-    _derivation()
+    _steps(r)
+    _parameters()
 
     st.divider()
     st.subheader("Performance curves — element vs reference")
