@@ -200,6 +200,50 @@ def _cmp_table(comps) -> pd.DataFrame:
     } for c in comps])
 
 
+def _data_consistency(dc) -> None:
+    """Level 1 — raw-data self-consistency, every step shown. No model."""
+    st.markdown("**Level 1 — data self-consistency** "
+                + ("✓" if dc.passed else "✗")
+                + "  ·  raw readings vs conservation laws, no model")
+    st.caption("Conservation checks the measurements must satisfy on their own. "
+               "These catch sensor or data-entry errors before any model runs. They "
+               "prove the readings are self-consistent — not that they are free of a "
+               "shared systematic error, which is why Levels 2–3 still follow.")
+
+    st.dataframe(pd.DataFrame([{
+        "Balance": b.label,
+        b_lhs(b): f"{b.lhs:.4g}",
+        b_rhs(b): f"{b.rhs:.4g}",
+        "Closure %": f"{b.closure_pct:.2f}",
+        "Tol": f"{b.tolerance_pct:g}",
+        "": "✓" if b.closed else "✗",
+    } for b in dc.balances]), hide_index=True, width="stretch")
+    for b in dc.balances:
+        st.latex(b.worked)
+
+    st.markdown("_Sanity checks_ (physical plausibility of the raw readings)")
+    st.dataframe(pd.DataFrame([{
+        "Check": s.description, "Reading": s.detail,
+        "": "✓" if s.ok else "✗",
+    } for s in dc.sanity]), hide_index=True, width="stretch")
+
+    for b in dc.balances:
+        if not b.closed:
+            st.warning(V.diagnose_balance(b))
+    for s in dc.sanity:
+        if not s.ok:
+            st.warning(f"Sanity: {s.description} — {s.detail}")
+    st.divider()
+
+
+def b_lhs(b):
+    return b.lhs_label
+
+
+def b_rhs(b):
+    return b.rhs_label
+
+
 def _run_card(rv) -> None:
     r = rv.run
     with st.expander(f"Run {r.run_id}" + (f" · {r.timestamp}" if r.timestamp else ""),
@@ -211,6 +255,7 @@ def _run_card(rv) -> None:
         if r.notes:
             st.caption(r.notes)
 
+        _data_consistency(rv.data_consistency)
         st.markdown("**Membrane** — driven by the measured feed pressure, feed TDS, feed "
                     "temperature and Qf = Qp + Qb")
         st.dataframe(_cmp_table(rv.membrane_comparisons), hide_index=True, width="stretch")
@@ -365,6 +410,9 @@ def render(controls: dict | None = None, feed: dict | None = None) -> None:
 
     st.divider()
     n_pass = sum(rv.overall_pass for rv in ds.runs)
+    n_data = sum(rv.data_consistency.passed for rv in ds.runs)
+    st.caption(f"{n_data} of {len(ds.runs)} runs self-consistent (Level 1) · "
+               f"{n_pass} of {len(ds.runs)} also pass model-vs-plant (Level 2)")
     st.subheader(f"Per-run results — {n_pass} of {len(ds.runs)} pass")
     for rv in ds.runs:
         _run_card(rv)
