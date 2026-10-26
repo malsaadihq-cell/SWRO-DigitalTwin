@@ -43,7 +43,7 @@ CHARACTERISTICS: dict[str, Spec] = {
         137.0, "cm³/rev",
         "Fluid volume the pump pushes per shaft revolution", P24),
     "rated_flow": Spec(
-        11.1, "m³/h",
+        11.4, "m³/h",
         "Delivered flow at max speed (1500 rpm) and 60 bar", P24),
     "rated_rpm": Spec(
         1500.0, "rpm",
@@ -87,7 +87,7 @@ def v(key: str) -> float:
 
 # ---------------------------------------------------------------------
 # The laws. Each returns the number; simulate() also builds the worked
-# string so the UI can show "11.1 × 1440/1500 = 10.66", not just the answer.
+# string so the UI can show "11.4 × 1250/1500 = 9.50", not just the answer.
 # ---------------------------------------------------------------------
 def rpm_from_frequency(hz: float) -> float:
     """Speed from VFD frequency. Fixed ratio (Chapter 4): rpm = hz × 25,
