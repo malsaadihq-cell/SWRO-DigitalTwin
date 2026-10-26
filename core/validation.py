@@ -51,6 +51,23 @@ from . import membrane, pump, valve
 
 DEFAULT_EC_TO_TDS = 0.64   # seawater, mg/L per μS/cm
 
+# Pressure is stored internally in bar everywhere in the model. The lab
+# gauges read PSI, so pressure is converted ONCE at the point of entry
+# (CSV load / page input) and never again — the rest of the program stays
+# in bar and is untouched. 1 PSI = 0.0689476 bar.
+PSI_TO_BAR = 0.0689476
+PRESSURE_UNITS = {"bar": 1.0, "psi": PSI_TO_BAR}
+
+
+def to_bar(value: float, unit: str = "bar") -> float:
+    """Convert a pressure reading to bar. `unit` is 'bar' or 'psi'."""
+    if value is None:
+        return value
+    try:
+        return value * PRESSURE_UNITS[unit.strip().lower()]
+    except KeyError:
+        raise ValueError(f"unknown pressure unit {unit!r}; use 'bar' or 'psi'")
+
 
 # =====================================================================
 # Acceptance bands
@@ -717,10 +734,18 @@ def diagnose_balance(b: BalanceCheck) -> str:
 _STR_FIELDS = {"run_id", "timestamp", "notes"}
 
 
-def load_runs_csv(path) -> list[TestRun]:
+_PRESSURE_FIELDS = {"hpp_feed_pressure", "hpp_brine_pressure"}
+
+
+def load_runs_csv(path, pressure_unit: str = "bar") -> list[TestRun]:
     """CSV columns match TestRun field names; unknown columns are ignored.
     Blank → None (fields with a numeric default fall back to that default).
-    `path` may be a filesystem path or a file-like object (e.g. an upload)."""
+    `path` may be a filesystem path or a file-like object (e.g. an upload).
+
+    `pressure_unit` is the unit of the pressure columns in the file ('bar'
+    or 'psi'). If 'psi', the two pressure columns are converted to bar on
+    load, so every TestRun is stored in bar regardless of how it was
+    recorded — the lab records PSI, the model works in bar."""
     if hasattr(path, "read"):
         raw = path.read()
         text = raw.decode("utf-8-sig") if isinstance(raw, bytes) else raw
@@ -742,7 +767,10 @@ def load_runs_csv(path) -> list[TestRun]:
                 if fields[k].default is dataclasses.MISSING or fields[k].default is None:
                     kwargs[k] = None
             else:
-                kwargs[k] = float(s)
+                val = float(s)
+                if k in _PRESSURE_FIELDS:
+                    val = to_bar(val, pressure_unit)
+                kwargs[k] = val
         runs.append(TestRun(**kwargs))
     return runs
 
