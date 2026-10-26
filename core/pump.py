@@ -23,7 +23,8 @@ from dataclasses import dataclass, field
 P24 = "Danfoss APP 11-13 manual, p. 24 — Technical data table (code 180B3211)"
 P25 = "Danfoss APP 11-13 manual, p. 25 — Flow at different rpm"
 P26 = "Danfoss APP 11-13 manual, p. 26 — Power requirements (APP 11/1500)"
-CH4 = "Project Chapter 4 — instrument survey (50 Hz corresponds to 1500 rpm)"
+CH4 = ("Project Chapter 4 — instrument survey. Plant motor nameplate is 60 Hz, "
+       "so 60 Hz corresponds to the pump's 1500 rpm rated speed (APP 11/1500)")
 
 
 # ---------------------------------------------------------------------
@@ -70,8 +71,9 @@ CHARACTERISTICS: dict[str, Spec] = {
         "Constant in the Danfoss power equation; bundles pump efficiency, "
         "specific to this pump variant", P26),
     "hz_to_rpm": Spec(
-        30.0, "rpm/Hz",
-        "Converts VFD frequency to shaft speed for this motor", CH4),
+        25.0, "rpm/Hz",
+        "Converts VFD frequency to shaft speed for this 60 Hz motor: at the "
+        "nameplate 60 Hz the pump runs at its 1500 rpm rated speed (1500/60 = 25)", CH4),
 }
 
 
@@ -88,7 +90,8 @@ def v(key: str) -> float:
 # string so the UI can show "11.1 × 1440/1500 = 10.66", not just the answer.
 # ---------------------------------------------------------------------
 def rpm_from_frequency(hz: float) -> float:
-    """Speed from VFD frequency. Fixed ratio (Chapter 4): rpm = hz × 30."""
+    """Speed from VFD frequency. Fixed ratio (Chapter 4): rpm = hz × 25,
+    so the 60 Hz nameplate frequency gives the 1500 rpm rated speed."""
     return hz * v("hz_to_rpm")
 
 
@@ -160,7 +163,8 @@ def simulate(frequency_hz: float, outlet_pressure: float,
     sec = (power / flow) if flow else math.inf
 
     worked = {
-        "rpm": rf"n = f \times 30 = {frequency_hz:.1f} \times 30 = {rpm:.0f}\ \mathrm{{rpm}}",
+        "rpm": (rf"n = f \times {v('hz_to_rpm'):g} = {frequency_hz:.1f} \times {v('hz_to_rpm'):g}"
+                rf" = {rpm:.0f}\ \mathrm{{rpm}}"),
         "flow": (rf"Q = Q_{{rated}}\,\frac{{n}}{{n_{{rated}}}}"
                  rf"\times h = {v('rated_flow')}\times\frac{{{rpm:.0f}}}{{1500}}"
                  rf"\times {health_factor:.2f} = {flow:.2f}\ \mathrm{{m^3/h}}"),
