@@ -83,7 +83,8 @@ def _example_run() -> pd.DataFrame:
     return pd.DataFrame([row], columns=[c for c, _, _ in COLUMNS])
 
 
-def _runs_from_df(df: pd.DataFrame, factor: float) -> tuple[list, list[str]]:
+def _runs_from_df(df: pd.DataFrame, factor: float,
+                  pressure_unit: str = "bar") -> tuple[list, list[str]]:
     runs, errors = [], []
     for i, row in df.iterrows():
         rid = row.get("run_id")
@@ -96,7 +97,12 @@ def _runs_from_df(df: pd.DataFrame, factor: float) -> tuple[list, list[str]]:
             v = row.get(c)
             if v is None or (not isinstance(v, str) and pd.isna(v)):
                 continue
-            kwargs[c] = str(v) if c in STR_FIELDS else float(v)
+            if c in STR_FIELDS:
+                kwargs[c] = str(v)
+            elif c in ("hpp_feed_pressure", "hpp_brine_pressure"):
+                kwargs[c] = V.to_bar(float(v), pressure_unit)
+            else:
+                kwargs[c] = float(v)
         missing = [c for c in REQUIRED if c not in kwargs]
         if missing:
             errors.append(f"run {rid}: missing " + ", ".join(missing))
@@ -113,7 +119,7 @@ def _runs_to_df(runs) -> pd.DataFrame:
 # ---------------------------------------------------------------------
 # Sections
 # ---------------------------------------------------------------------
-def _settings() -> tuple[float, float, float, dict]:
+def _settings() -> tuple[float, float, float, dict, str]:
     with st.expander("Settings", expanded=False):
         c1, c2, c3 = st.columns(3)
         factor = c1.slider("EC → TDS factor (mg/L per μS/cm)", 0.55, 0.75,
@@ -123,6 +129,10 @@ def _settings() -> tuple[float, float, float, dict]:
                                   help="1.0 = catalogue (clean) element. A what-if, not a fit.")
         health = c3.number_input("Pump health factor", 0.5, 1.2, 1.0, 0.01,
                                  help="1.0 = Danfoss reference flow.")
+        pressure_unit = c1.radio(
+            "Pressure unit in your readings", ["bar", "psi"], index=0, horizontal=True,
+            help="The lab gauges read PSI; pick 'psi' and both pressure columns are "
+                 "converted to bar automatically on entry. 1 PSI = 0.0689 bar.")
         st.markdown("**Tolerances** (± % of the measured value)")
         tol_df = pd.DataFrame([{"KPI": V.KPI_META[k][0], "key": k, "Tolerance (%)": v}
                                for k, v in V.DEFAULT_TOLERANCES.items()])
@@ -134,10 +144,10 @@ def _settings() -> tuple[float, float, float, dict]:
         )
         tolerances = {r["key"]: float(r["Tolerance (%)"]) for _, r in edited.iterrows()
                       if pd.notna(r["Tolerance (%)"])}
-    return factor, fouling, health, tolerances
+    return factor, fouling, health, tolerances, pressure_unit
 
 
-def _test_runs(factor: float) -> list:
+def _test_runs(factor: float, pressure_unit: str = "bar") -> list:
     st.subheader("Test runs")
     if "val_runs_df" not in st.session_state:
         st.session_state.val_runs_df = _empty_runs()
@@ -159,13 +169,19 @@ def _test_runs(factor: float) -> list:
             st.session_state.val_runs_df = _empty_runs()
             st.session_state.pop("val_editor", None)
             st.session_state.pop("val_result", None)
-        cfg = {c: (st.column_config.TextColumn(label) if c in STR_FIELDS else
-                   st.column_config.NumberColumn(label, format="%.3f"))
-               for c, label, _ in COLUMNS}
+        if pressure_unit == "psi":
+            st.caption("Pressure unit = **PSI**: the two pressure columns are read as PSI "
+                       "and converted to bar automatically.")
+        cfg = {}
+        for c, label, _ in COLUMNS:
+            if c in ("hpp_feed_pressure", "hpp_brine_pressure"):
+                label = label.replace("(bar)", f"({pressure_unit})")
+            cfg[c] = (st.column_config.TextColumn(label) if c in STR_FIELDS else
+                      st.column_config.NumberColumn(label, format="%.3f"))
         edited = st.data_editor(st.session_state.val_runs_df, num_rows="dynamic",
                                 hide_index=True, column_config=cfg, key="val_editor",
                                 width="stretch")
-        runs, errors = _runs_from_df(edited, factor)
+        runs, errors = _runs_from_df(edited, factor, pressure_unit)
 
     with upload:
         st.caption("CSV columns use the TestRun field names (run_id, hpp_feed_pressure, …); "
@@ -174,7 +190,7 @@ def _test_runs(factor: float) -> list:
         f = st.file_uploader("Test-run CSV", type=["csv"])
         if f is not None:
             try:
-                csv_runs = V.load_runs_csv(f)
+                csv_runs = V.load_runs_csv(f, pressure_unit=pressure_unit)
                 csv_runs = [dataclasses.replace(r, ec_to_tds_factor=factor) for r in csv_runs]
                 st.dataframe(_runs_to_df(csv_runs), hide_index=True, width="stretch")
                 if st.checkbox("Validate the uploaded runs instead of the manual table",
@@ -394,8 +410,8 @@ def render(controls: dict | None = None, feed: dict | None = None) -> None:
     st.header("Model vs plant — validation of the digital twin")
     st.caption(CAPTION)
 
-    factor, fouling, health, tolerances = _settings()
-    runs = _test_runs(factor)
+    factor, fouling, health, tolerances, pressure_unit = _settings()
+    runs = _test_runs(factor, pressure_unit)
 
     if st.button("Run validation", type="primary", disabled=not runs):
         st.session_state.val_result = V.validate_dataset(runs, tolerances, health, fouling)
