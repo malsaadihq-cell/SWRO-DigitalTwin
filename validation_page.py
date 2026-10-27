@@ -204,7 +204,28 @@ def _test_runs(factor: float, pressure_unit: str = "bar") -> list:
     return runs
 
 
-def _cmp_table(comps) -> pd.DataFrame:
+# column help shared by the Level-2 comparison tables — written so the reader
+# never has to guess what "predicted" or "Δ" mean, exactly as Level 1 does.
+_CMP_HELP = {
+    "KPI": "The quantity being compared, with its unit.",
+    "Predicted": "The model's value (ŷ): what membrane.simulate computes from the "
+                 "measured operating conditions (feed pressure, feed TDS, feed "
+                 "temperature, Qf = Qp + Qb). No measurement of this quantity is used.",
+    "Measured": "The plant value (y): read at the plant this run — the metered flow, "
+                "or a conductivity reading converted to TDS, or the gauge ΔP.",
+    "Abs err": "Absolute difference |ŷ − y|, in the KPI's own unit — how far the "
+               "prediction is from the measurement.",
+    "Rel err %": "Signed relative error 100·(ŷ − y)/|y|. Positive = the model "
+                 "over-predicts, negative = it under-predicts.",
+    "Tol %": "Acceptance threshold. |Rel err| at or below this counts as a match "
+             "(🟢). Set in Settings.",
+    "Status": "🟢 within tolerance · 🔴 outside it.",
+}
+
+
+def _cmp_table_v2(comps) -> pd.DataFrame:
+    """Level-2 comparison table in the Level-1 visual style: predicted vs
+    measured, the gap both ways (absolute and relative), and a coloured mark."""
     return pd.DataFrame([{
         "KPI": f"{V.KPI_META[c.name][0]} ({c.unit})",
         "Predicted": f"{c.predicted:.4g}",
@@ -212,8 +233,29 @@ def _cmp_table(comps) -> pd.DataFrame:
         "Abs err": f"{c.absolute_error:.3g}",
         "Rel err %": "—" if math.isnan(c.relative_error_pct) else f"{c.relative_error_pct:+.1f}",
         "Tol %": f"{c.tolerance_pct:g}",
-        "": "✓" if c.within_tolerance else "✗",
+        "Status": _check_mark(c.within_tolerance),
     } for c in comps])
+
+
+def _cmp_column_config() -> dict:
+    return {k: st.column_config.TextColumn(k, help=v) for k, v in _CMP_HELP.items()}
+
+
+def _level2_check(comps, block: str, caption: str) -> None:
+    """Level 2 (model vs plant) — predicted vs measured, same open style as
+    Level 1: how big each side is and how far apart they are, maths shown.
+    Used for both the membrane block and the pump block."""
+    passed = all(c.within_tolerance for c in comps)
+    _status_badge(
+        passed,
+        f"Level 2 ({block}) — model matches the plant within tolerance on every KPI",
+        f"Level 2 ({block}) — model and plant differ beyond tolerance on one or more KPIs",
+    )
+    st.caption(caption)
+    st.dataframe(_cmp_table_v2(comps), hide_index=True, width="stretch",
+                 column_config=_cmp_column_config())
+    for c in comps:
+        st.latex(c.worked)
 
 
 def _status_badge(passed: bool, label_pass: str, label_fail: str) -> None:
@@ -330,16 +372,20 @@ def _run_card(rv) -> None:
             st.caption(r.notes)
 
         _data_consistency(rv.data_consistency)
-        st.markdown("**Membrane** — driven by the measured feed pressure, feed TDS, feed "
-                    "temperature and Qf = Qp + Qb")
-        st.dataframe(_cmp_table(rv.membrane_comparisons), hide_index=True, width="stretch")
-        for c in rv.membrane_comparisons:
-            st.latex(c.worked)
+        _level2_check(
+            rv.membrane_comparisons, "membrane",
+            "Level 2 · model vs plant — the membrane model is driven by this run's "
+            "measured operating conditions (feed pressure, feed TDS, feed temperature, "
+            "Qf = Qp + Qb) and its prediction is compared with the plant reading. This "
+            "measures the gap only; no parameter is adjusted.")
+        st.divider()
 
-        st.markdown("**Pump** — Danfoss flow at the set VFD frequency vs mass balance")
-        st.dataframe(_cmp_table(rv.pump_comparisons), hide_index=True, width="stretch")
-        for c in rv.pump_comparisons:
-            st.latex(c.worked)
+        _level2_check(
+            rv.pump_comparisons, "pump",
+            "Level 2 · model vs plant — the pump's Danfoss flow law predicts the feed "
+            "flow from the set VFD frequency (Qf = Q_rated·n/1500·health); it is compared "
+            "with the mass-balance feed flow Qp + Qb. This measures the gap only; no "
+            "parameter is adjusted.")
 
         mb = rv.mass_balance
         st.markdown("**Mass balance**")
