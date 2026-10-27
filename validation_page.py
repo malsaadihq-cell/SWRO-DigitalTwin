@@ -243,36 +243,40 @@ def _data_consistency(dc) -> None:
                "not that they are free of a shared systematic error, which is why "
                "Levels 2–3 still follow.")
 
-    # Balances — two value columns named after the two SIDES of the balance
-    # equation (e.g. "Qf (pump)" vs "Qp + Qb"), each cell showing that side's
-    # name and its value together, so the reader never has to decode "LHS/RHS".
-    # The full expression with the numbers substituted is the maths below each row.
+    # Balances — the FIRST side is predicted (the pump block computes the feed
+    # flow from the VFD frequency via the Danfoss laws: Qf = Q_rated·(n/n_rated)·h),
+    # the SECOND side is measured (the metered outlets, Qp + Qb). So the table is
+    # Predicted vs Measured. The recovery-consistency row is NOT shown here: both
+    # of its sides come from the same two meters, so it is an internal identity
+    # (always ~0), not a predicted-vs-measured test — it would mislabel the columns.
+    shown = [b for b in dc.balances if b.name != "recovery"]
     st.dataframe(
         pd.DataFrame([{
             "Balance": b.label,
-            "First side": f"{b.lhs_label} = {b.lhs:.4g}",
-            "Second side": f"{b.rhs_label} = {b.rhs:.4g}",
+            "Predicted": f"{b.lhs_label} = {b.lhs:.4g}",
+            "Measured": f"{b.rhs_label} = {b.rhs:.4g}",
             "Unit": b.unit,
             "Closure %": f"{b.closure_pct:.2f}",
             "Tol %": f"{b.tolerance_pct:g}",
             "Status": _check_mark(b.closed),
-        } for b in dc.balances]),
+        } for b in shown]),
         hide_index=True, width="stretch",
         column_config={
             "Balance": st.column_config.TextColumn(
-                "Balance", help="The conservation law being checked. Both sides are "
-                "measured quantities — this is NOT model vs plant (that is Level 2); "
-                "here the readings are checked against each other."),
-            "First side": st.column_config.TextColumn(
-                "First side", help="The first side of the balance equation, with its "
-                "measured value. For mass balance this is the pump-delivered feed flow."),
-            "Second side": st.column_config.TextColumn(
-                "Second side", help="The second side of the balance equation, with its "
-                "measured value. It must equal the first side if the readings are sound."),
+                "Balance", help="The conservation law being checked: the pump-predicted "
+                "feed flow must account for the metered outlets. This closes the loop "
+                "around an unmetered feed — the plant does not measure feed flow directly."),
+            "Predicted": st.column_config.TextColumn(
+                "Predicted", help="The pump block's prediction, computed from the set VFD "
+                "frequency through the Danfoss laws (n = 30·f; Qf = Q_rated·n/1500·health). "
+                "For salt balance it is that predicted Qf times the measured feed TDS."),
+            "Measured": st.column_config.TextColumn(
+                "Measured", help="The plant reading: the metered permeate and brine flows "
+                "(Qp + Qb), times their measured TDS for the salt balance. It must equal "
+                "the predicted side if both the model and the meters are sound."),
             "Closure %": st.column_config.TextColumn(
-                "Closure %", help="How far the two sides disagree, as a % of the larger "
-                "side: 100·|first − second| / max(|first|, |second|). Zero = perfect "
-                "closure."),
+                "Closure %", help="How far predicted and measured disagree, as a % of the "
+                "larger side: 100·|predicted − measured| / max(|·|). Zero = perfect closure."),
             "Tol %": st.column_config.TextColumn(
                 "Tol %", help="Acceptance threshold. Closure at or below this counts as "
                 "closed (🟢). Set in Settings."),
@@ -280,7 +284,7 @@ def _data_consistency(dc) -> None:
                 "Status", help="🟢 the balance closes within tolerance · 🔴 it does not."),
         },
     )
-    for b in dc.balances:
+    for b in shown:
         st.latex(b.worked)
 
     st.markdown("_Sanity checks_ (physical plausibility of the raw readings)")
