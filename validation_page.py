@@ -216,23 +216,44 @@ def _cmp_table(comps) -> pd.DataFrame:
     } for c in comps])
 
 
+def _status_badge(passed: bool, label_pass: str, label_fail: str) -> None:
+    """A clear coloured status line: green check when passed, amber when not."""
+    if passed:
+        st.success(f"**{label_pass}**", icon=":material/check_circle:")
+    else:
+        st.warning(f"**{label_fail}**", icon=":material/error:")
+
+
+def _check_mark(ok: bool) -> str:
+    """Green check / red cross as coloured markdown, not a bare grey glyph."""
+    return "🟢" if ok else "🔴"
+
+
 def _data_consistency(dc) -> None:
     """Level 1 — raw-data self-consistency, every step shown. No model."""
-    st.markdown("**Level 1 — data self-consistency** "
-                + ("✓" if dc.passed else "✗")
-                + "  ·  raw readings vs conservation laws, no model")
-    st.caption("Conservation checks the measurements must satisfy on their own. "
-               "These catch sensor or data-entry errors before any model runs. They "
-               "prove the readings are self-consistent — not that they are free of a "
-               "shared systematic error, which is why Levels 2–3 still follow.")
+    # Clear, self-contained status for Level 1 (independent of the model levels)
+    _status_badge(
+        dc.passed,
+        "Level 1 verified — the raw readings are self-consistent (no model used)",
+        "Level 1 failed — the raw readings break a conservation law or a sanity check",
+    )
+    st.caption("Level 1 · data self-consistency — conservation laws the measurements "
+               "must satisfy on their own. These catch sensor or data-entry errors "
+               "before any model runs. They prove the readings are self-consistent — "
+               "not that they are free of a shared systematic error, which is why "
+               "Levels 2–3 still follow.")
 
+    # Balances — two fixed value columns (LHS/RHS); the full expression with the
+    # substituted numbers is shown as maths directly below each row, so the table
+    # stays compact instead of sprouting a column per balance.
     st.dataframe(pd.DataFrame([{
         "Balance": b.label,
-        b_lhs(b): f"{b.lhs:.4g}",
-        b_rhs(b): f"{b.rhs:.4g}",
+        "LHS": f"{b.lhs:.4g}",
+        "RHS": f"{b.rhs:.4g}",
+        "Unit": b.unit,
         "Closure %": f"{b.closure_pct:.2f}",
-        "Tol": f"{b.tolerance_pct:g}",
-        "": "✓" if b.closed else "✗",
+        "Tol %": f"{b.tolerance_pct:g}",
+        "Status": _check_mark(b.closed),
     } for b in dc.balances]), hide_index=True, width="stretch")
     for b in dc.balances:
         st.latex(b.worked)
@@ -240,7 +261,7 @@ def _data_consistency(dc) -> None:
     st.markdown("_Sanity checks_ (physical plausibility of the raw readings)")
     st.dataframe(pd.DataFrame([{
         "Check": s.description, "Reading": s.detail,
-        "": "✓" if s.ok else "✗",
+        "Status": _check_mark(s.ok),
     } for s in dc.sanity]), hide_index=True, width="stretch")
 
     for b in dc.balances:
@@ -252,22 +273,18 @@ def _data_consistency(dc) -> None:
     st.divider()
 
 
-def b_lhs(b):
-    return b.lhs_label
-
-
-def b_rhs(b):
-    return b.rhs_label
-
-
 def _run_card(rv) -> None:
     r = rv.run
     with st.expander(f"Run {r.run_id}" + (f" · {r.timestamp}" if r.timestamp else ""),
                      expanded=len(st.session_state.val_result.runs) == 1):
+        # Overall badge reflects BOTH levels, but names which level is the blocker
+        # so a green Level 1 below is never contradicted by a bare red FAIL above.
         if rv.overall_pass:
-            st.badge("PASS", icon=":material/check:", color="green")
+            st.badge("PASS · both levels", icon=":material/check:", color="green")
+        elif rv.data_consistency.passed:
+            st.badge("Level 1 OK · Level 2 gap", icon=":material/check:", color="blue")
         else:
-            st.badge("FAIL", icon=":material/warning:", color="orange")
+            st.badge("Level 1 failed", icon=":material/warning:", color="orange")
         if r.notes:
             st.caption(r.notes)
 
