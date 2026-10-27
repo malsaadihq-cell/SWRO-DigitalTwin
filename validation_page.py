@@ -241,6 +241,53 @@ def _cmp_column_config() -> dict:
     return {k: st.column_config.TextColumn(k, help=v) for k, v in _CMP_HELP.items()}
 
 
+# The seven CH9 steps, in order, with a plain-language heading for each so the
+# reader can follow the derivation from the operating conditions to the predicted
+# KPIs — and see exactly which law and which numbers produced each value.
+_STEP_TITLES = [
+    ("step1", "Step 1 — preliminary concentrations",
+     "Brine (Cc), feed-concentrate average (Cfc) and permeate (Cp) before the iteration."),
+    ("step2", "Step 2 — design flux → permeate flow per element",
+     "Qe from the design flux and the element area."),
+    ("step3", "Step 3 — permeabilities Kw, Ks at 25 °C",
+     "Derived from the element's standard-test performance on the spec sheet."),
+    ("step4", "Step 4 — preliminary feed pressure",
+     "The osmotic build-up and the feed pressure the chosen flux would need."),
+    ("step5", "Step 5 — flows, recovery & polarisation (iterated)",
+     "The core solve: recovery is unknown because it sets the brine concentration, "
+     "which sets the osmotic pressure, which sets the flux — so it is iterated to "
+     "convergence. This is where the predicted permeate flow Qp comes from."),
+    ("step6", "Step 6 — permeate quality",
+     "The predicted permeate TDS (Cp) from the salt permeability and the flux."),
+    ("step7", "Step 7 — cross-flow velocity",
+     "The feed-channel velocity from the spacer geometry."),
+]
+
+
+def _membrane_derivation(mr) -> None:
+    """Show the full CH9 Step 1–7 working that produced the predicted KPIs, so the
+    derivation can be read and criticised, not just its result. Every line is the
+    model's own stored working with this run's numbers substituted."""
+    if mr is None or not getattr(mr, "step_worked", None):
+        return
+    with st.expander("How the predicted values were derived — full CH9 Steps 1–7",
+                     expanded=False):
+        st.caption("The membrane model (IWA Ch. 9, single element, solution-diffusion) "
+                   "solves these seven steps from the measured operating conditions. "
+                   "Steps 5 and 6 produce the predicted permeate flow and TDS compared "
+                   "above; element ΔP is the fixed catalogue dPe, not solved here. Each "
+                   "line is the law with this run's values substituted.")
+        for key, title, blurb in _STEP_TITLES:
+            lines = mr.step_worked.get(key)
+            if not lines:
+                continue
+            st.markdown(f"**{title}**")
+            st.caption(blurb)
+            for body in lines.values():
+                st.latex(body)
+            st.markdown("")
+
+
 def _level2_check(comps, block: str, caption: str) -> None:
     """Level 2 (model vs plant) — predicted vs measured, same open style as
     Level 1: how big each side is and how far apart they are, maths shown.
@@ -378,6 +425,7 @@ def _run_card(rv) -> None:
             "measured operating conditions (feed pressure, feed TDS, feed temperature, "
             "Qf = Qp + Qb) and its prediction is compared with the plant reading. This "
             "measures the gap only; no parameter is adjusted.")
+        _membrane_derivation(rv.membrane_result)
         st.divider()
 
         _level2_check(
