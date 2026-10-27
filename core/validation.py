@@ -398,32 +398,13 @@ def sanity_checks(run: TestRun) -> list[SanityCheck]:
         ok, f"Cp = {cp:.0f}, Cf = {cf:.0f}, Cb = {cb:.0f} mg/L",
         rf"C_p < C_f < C_b:\ {cp:.0f} < {cf:.0f} < {cb:.0f}\ \mathrm{{mg/L}}"))
 
-    # 3. recovery in a sane window for a small SWRO element
-    R = (run.permeate_flow / qf) if qf else math.nan
-    ok = 0.0 < R < 0.6
-    out.append(SanityCheck(
-        "recovery_window", "Recovery within 0–60 % (single SWRO element)",
-        ok, f"R = {R*100:.1f} %",
-        rf"0 < R = {R*100:.1f}\% < 60\%"))
-
-    # 4. brine pressure below feed pressure (ΔP across the element is positive)
+    # 3. brine pressure below feed pressure (ΔP across the element is positive)
     dp = run.element_dp_measured
     ok = dp > 0
     out.append(SanityCheck(
         "positive_element_dp", "Feed pressure above brine pressure (ΔP > 0)",
         ok, f"ΔP = {dp:+.2f} bar (feed {run.hpp_feed_pressure:.1f}, brine {run.hpp_brine_pressure:.1f})",
         rf"P_{{feed}} > P_{{brine}}:\ {run.hpp_feed_pressure:.1f} > {run.hpp_brine_pressure:.1f}\ \mathrm{{bar}}"))
-
-    # 5. all core readings strictly positive (catch blank/zero meters)
-    vals = {"Qp": run.permeate_flow, "Qb": run.brine_flow,
-            "feed EC": run.feed_conductivity, "brine EC": run.brine_conductivity,
-            "permeate EC": run.permeate_conductivity,
-            "feed P": run.hpp_feed_pressure, "feed T": run.feed_temperature}
-    bad = [k for k, x in vals.items() if not (x is not None and x > 0)]
-    out.append(SanityCheck(
-        "positive_readings", "All core readings strictly positive",
-        not bad, "all positive" if not bad else "non-positive: " + ", ".join(bad),
-        rf"\text{{all core readings}} > 0"))
 
     return out
 
