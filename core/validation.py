@@ -249,6 +249,9 @@ class RunValidation:
     thermal_consistency: dict
     permeate_gradient: dict
     overall_pass: bool                     # Level 1 AND Level 2 both pass
+    membrane_result: "membrane.MembraneResult | None" = None  # full solve, for the
+    #   step-by-step display: carries step_worked (CH9 Steps 1–7). Comparisons are
+    #   unchanged — this just keeps the intermediate working that produced them.
 
     @property
     def comparisons(self) -> list[KpiComparison]:
@@ -612,7 +615,17 @@ def validate_run(run: TestRun, tolerances: dict | None = None, health: float = 1
     pass — that is the whole point of layering.
     """
     dc = check_data_consistency(run, balance_tol, health)
-    mc = validate_membrane_block(run, tolerances, fouling)
+    # Solve the membrane once and keep the full result, so the page can show the
+    # Step 1–7 working that led to each predicted KPI. The comparison list is the
+    # same as validate_membrane_block would return (identical computation).
+    mr = membrane_boundary(run, fouling)
+    measured = {
+        "permeate_flow": run.permeate_flow,
+        "permeate_tds": run.permeate_tds,
+        "brine_tds": run.brine_tds,
+        "element_dp": run.element_dp_measured,
+    }
+    mc = membrane.validate_membrane(mr, measured, tolerances)
     pc = validate_pump_block(run, tolerances, health)
     model_ok = all(c.within_tolerance for c in mc + pc)
     return RunValidation(
@@ -626,6 +639,7 @@ def validate_run(run: TestRun, tolerances: dict | None = None, health: float = 1
         thermal_consistency=thermal_consistency(run),
         permeate_gradient=permeate_gradient_check(run),
         overall_pass=dc.passed and model_ok,
+        membrane_result=mr,
     )
 
 
