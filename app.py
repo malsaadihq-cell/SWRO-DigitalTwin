@@ -51,6 +51,8 @@ CHARTS = {
     "brine_vs_open":   ("Brine flow vs valve opening",    "Valve opening (%)",   "Brine flow (m³/h)"),
 }
 
+EXPERIMENTS_MODE = "Full system - with Experiments"
+
 MODES = {
     "Full system": dict(
         controls=["frequency", "valve_opening"],
@@ -58,10 +60,11 @@ MODES = {
         charts=["flux_vs_p", "sec_vs_rec", "rej_vs_p"],
         note="Both knobs are live. The model solves the operating point and every KPI.",
     ),
-    "Validation": dict(
+    EXPERIMENTS_MODE: dict(
         controls=[], kpis=[], charts=[],
-        note="Model vs plant: enter measured test runs and see the gap per KPI. "
-             "No parameter is adjusted.",
+        note="Load the lab workbook, pick an experiment: its frequency, valve opening "
+             "and feed conditions drive the full plant, and the simulated results are "
+             "set beside the measured ones. No parameter is adjusted.",
     ),
     "Pump only": dict(
         controls=["frequency", "outlet_pressure", "health_factor"],
@@ -135,7 +138,7 @@ def sidebar() -> tuple[str, dict, dict]:
     ) or "Full system"
     st.sidebar.caption(MODES[mode]["note"])
 
-    if mode in ("Architecture", "Validation"):
+    if mode in ("Architecture", EXPERIMENTS_MODE):
         return mode, {}, {}
 
     keys = MODES[mode]["controls"]
@@ -263,9 +266,9 @@ def main() -> None:
         import system_page
         system_page.render(controls, feed)
         return
-    if mode == "Validation":
-        import validation_page
-        validation_page.render(controls, feed)
+    if mode == EXPERIMENTS_MODE:
+        import experiments_page
+        experiments_page.render(controls, feed)
         return
 
     # Unbuilt blocks still show the interface foundation (empty state).
