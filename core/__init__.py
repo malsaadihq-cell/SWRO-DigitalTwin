@@ -6,7 +6,7 @@ from . import pump
 from . import membrane
 from . import valve
 from . import system
-from . import validation
+from . import experiments
 from .membrane import (
     step1_preliminary_concentrations,
     step2_flux_and_flow,
@@ -19,7 +19,7 @@ from .membrane import (
 )
 
 __all__ = [
-    "pump", "membrane", "valve", "system", "validation",
+    "pump", "membrane", "valve", "system", "experiments",
     "step1_preliminary_concentrations", "step2_flux_and_flow",
     "step3_permeabilities", "step4_feed_pressure",
     "step5_flows_recovery_beta", "step6_permeate_quality",
