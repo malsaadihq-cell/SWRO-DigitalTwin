@@ -1,379 +1,213 @@
-"""Full system - with Experiments.
+"""Full-system view — the coupled plant, run like a real operation.
 
-Replaces the old Validation page. One flow, top to bottom:
-
-    1. Load the experiment workbook (.xlsx)
-    2. Pick an experiment — the count is detected from the sheet
-    3. Show that experiment's simulation inputs (Hz, valve %) and feed conditions
-    4. Lab vs simulation for every predicted quantity, with the difference and % —
-       numbers only, no pass/fail verdict
-    5. The equations behind every simulated value, each linked both ways to its row
-
-The full coupled plant (core.system.simulate) is driven by the two knobs and
-the feed conditions taken from the workbook. The valve knob is the run's
-measured resistance K = P_brine / Q_brine² (the hand-wheel position is never
-recorded), so the brine pressure is an input in disguise and its comparison
-row is labelled as such. No parameter is adjusted.
+Two knobs (VFD frequency, brine-valve resistance K) + the measured feed
+conditions drive the whole plant. The page reports the four project KPIs
+(recovery, flux, rejection, SEC), the stream states, the coupling, and
+performance maps across the knobs.
 """
 from __future__ import annotations
 
 import math
 
+import altair as alt
+import pandas as pd
 import streamlit as st
 
-from core import experiments as X
-from core import membrane, pump, valve
 from core import system as S
 
-ACCENT = "#285A7A"   # app steel blue
-
-# key, label, unit, decimals
-ROWS = [
-    ("operating_pressure", "Feed (operating) pressure", "bar", 2),
-    ("brine_pressure",     "Brine pressure",            "bar", 2),
-    ("feed_flow",          "Feed flow",                 "m³/h", 2),
-    ("permeate_flow",      "Permeate flow",             "m³/h", 3),
-    ("brine_flow",         "Brine flow",                "m³/h", 2),
-    ("recovery",           "Recovery",                  "%", 2),
-    ("flux",               "Permeate flux",             "LMH", 2),
-    ("permeate_tds",       "Permeate TDS",              "mg/L", 1),
-    ("brine_tds",          "Brine TDS",                 "mg/L", 0),
-    ("rejection",          "Salt rejection",            "%", 2),
-    ("power",              "Shaft power",               "kW", 2),
-    ("sec",                "Specific energy",           "kWh/m³", 2),
-    ("beta",               "Polarisation factor β",     "–", 3),
-]
-BASIS_TEXT = {"measured": "measured", "derived": "from measurements",
-              "workbook calc": "calculated in workbook",
-              "sets K": "measured · used to set K"}
-
-CSS = f"""
-<style>
-.fx-step {{ display:flex; align-items:baseline; gap:.6rem; margin:1.6rem 0 .5rem; }}
-.fx-step b {{ color:{ACCENT}; font-size:1.05rem; }}
-.fx-step span {{ font-size:1.25rem; font-weight:650; }}
-.fx-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; }}
-.fx-box {{ border:1px solid rgba(128,128,128,.28); border-radius:10px; padding:14px 16px; }}
-.fx-box.drive {{ border-left:4px solid {ACCENT}; }}
-.fx-box h4 {{ margin:0 0 .15rem; font-size:.95rem; }}
-.fx-box p.sub {{ margin:0 0 .7rem; font-size:.82rem; opacity:.7; }}
-.fx-kv {{ display:flex; justify-content:space-between; align-items:baseline;
-          padding:.3rem 0; border-top:1px dashed rgba(128,128,128,.25); }}
-.fx-kv:first-of-type {{ border-top:0; }}
-.fx-kv .k {{ font-size:.9rem; opacity:.85; }}
-.fx-kv .v {{ font-size:1.35rem; font-weight:650; font-variant-numeric:tabular-nums; }}
-.fx-kv .v small {{ font-size:.8rem; font-weight:500; opacity:.7; margin-left:.25rem; }}
-.fx-wrap {{ overflow-x:auto; }}
-table.fx-cmp {{ width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }}
-table.fx-cmp th {{ text-align:right; font-size:.8rem; font-weight:600; opacity:.75;
-                   padding:.5rem .6rem; border-bottom:2px solid rgba(128,128,128,.35); }}
-table.fx-cmp th:first-child, table.fx-cmp td:first-child {{ text-align:left; }}
-table.fx-cmp td {{ text-align:right; padding:.55rem .6rem;
-                   border-bottom:1px solid rgba(128,128,128,.18); white-space:nowrap; }}
-table.fx-cmp tr {{ scroll-margin-top:5rem; }}
-table.fx-cmp tr:target td {{ background:rgba(40,90,122,.12); }}
-table.fx-cmp td .u {{ opacity:.6; font-size:.8rem; margin-left:.2rem; }}
-table.fx-cmp td .basis {{ display:block; font-size:.72rem; opacity:.6; }}
-table.fx-cmp td.sim {{ font-weight:650; color:{ACCENT}; }}
-table.fx-cmp td.pct {{ font-weight:650; }}
-a.fx-jump, a.fx-back {{ font-size:.78rem; text-decoration:none; color:{ACCENT};
-           border:1px solid {ACCENT}; border-radius:6px; padding:.18rem .5rem; }}
-a.fx-jump:hover, a.fx-back:hover {{ background:{ACCENT}; color:#fff; }}
-a.fx-jump:focus-visible, a.fx-back:focus-visible {{ outline:2px solid {ACCENT}; outline-offset:2px; }}
-.fx-eqhead {{ display:flex; justify-content:space-between; align-items:center; gap:1rem;
-              margin-top:1.4rem; padding-top:.9rem; border-top:1px solid rgba(128,128,128,.25);
-              scroll-margin-top:5rem; }}
-.fx-eqhead span {{ font-weight:650; font-size:1.05rem; }}
-.fx-eqhead span em {{ font-style:normal; opacity:.6; font-weight:500; font-size:.85rem; }}
-</style>
-"""
+LINE = "#285A7A"
+MODEL = "#C2703A"
+INK = "#201E1A"
+GRID = "#D7D1C4"
 
 
-# ---------------------------------------------------------------------------
-# cached work
-# ---------------------------------------------------------------------------
-@st.cache_data(show_spinner=False)
-def _parse(data: bytes):
-    return X.load_workbook(data)
+def _fmt(x, nd=2):
+    return "—" if (x is None or not math.isfinite(x)) else f"{x:.{nd}f}"
 
 
-@st.cache_data(show_spinner="Solving the coupled plant…")
-def _solve(freq: float, k: float, tds: float, temp: float):
-    r = S.simulate(freq, k, tds, temp)
-    # the membrane result at the solved point (element inlet pressure, plant
-    # salt passage) comes with the system result, so its CH9 working can be shown
-    vr = valve.simulate(k, r.brine_flow)
-    return r, r.membrane, vr
+def _kpis(r: S.SystemResult) -> None:
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Recovery (%)", _fmt(r.recovery * 100, 1),
+              help="R = permeate / feed flow. Set mainly by the valve resistance K.")
+    c2.metric("Permeate flux (LMH)", _fmt(r.flux, 1),
+              help="Permeate flow per membrane area.")
+    c3.metric("Salt rejection (%)", _fmt(r.rejection * 100, 2),
+              help="1 − permeate TDS / feed TDS.")
+    c4.metric("Specific energy (kWh/m³)", _fmt(r.sec, 1),
+              help="Pump shaft power / permeate flow — the key energy KPI.")
+
+    d1, d2, d3, d4 = st.columns(4)
+    d1.metric("Operating pressure (bar)", _fmt(r.operating_pressure, 1),
+              help="Feed-gauge pressure, solved from the pump–membrane–valve balance.")
+    d2.metric("Feed flow (m³/h)", _fmt(r.feed_flow, 2),
+              help="Delivered by the pump from the VFD frequency.")
+    d3.metric("Permeate flow (m³/h)", _fmt(r.permeate_flow, 2))
+    d4.metric("Shaft power (kW)", _fmt(r.power, 2))
 
 
-# ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
-def _step(n: int, title: str) -> None:
-    st.markdown(f'<div class="fx-step"><b>{n}</b><span>{title}</span></div>',
-                unsafe_allow_html=True)
+def _streams(r: S.SystemResult) -> None:
+    st.markdown("**Stream states**")
+    df = pd.DataFrame([
+        {"Stream": "Feed", "Flow (m³/h)": f"{r.feed_flow:.2f}",
+         "Pressure (bar)": f"{r.operating_pressure:.1f}", "TDS (mg/L)": f"{r.feed_tds:.0f}"},
+        {"Stream": "Permeate", "Flow (m³/h)": f"{r.permeate_flow:.2f}",
+         "Pressure (bar)": "~0", "TDS (mg/L)": f"{r.permeate_tds:.0f}"},
+        {"Stream": "Brine", "Flow (m³/h)": f"{r.brine_flow:.2f}",
+         "Pressure (bar)": _fmt(r.valve_back_pressure, 1),
+         "TDS (mg/L)": f"{r.brine_tds:.0f}"},
+    ])
+    st.dataframe(df, hide_index=True, width='stretch')
 
 
-def _ok(x) -> bool:
-    return x is not None and isinstance(x, (int, float)) and math.isfinite(x)
+def _coupling(r: S.SystemResult) -> None:
+    with st.expander("How the plant is solved (coupling)", expanded=False):
+        st.caption("The three blocks share one unknown — the operating pressure. The pump "
+                   "fixes the feed flow; the membrane turns part of it into permeate; the valve "
+                   "must pass the brine and develops the back-pressure K·Qb². One pressure "
+                   "balances all, with the measured gauge-to-gauge loss ΔP_gauges in between.")
+        for key in ("rpm", "leak", "qfeed", "balance", "pressure", "brine_p", "p_mem"):
+            st.latex(r.worked[key])
+        st.latex(r.worked["recovery"])
+        st.latex(r.worked["sec"])
 
 
-def _fmt(x, d: int) -> str:
-    return f"{x:,.{d}f}" if _ok(x) else "—"
+def _xscale(dom):
+    return alt.Scale(domain=dom, nice=False)
 
 
-def _sim_values(r, mr) -> dict:
-    return {
-        "operating_pressure": r.operating_pressure,
-        "brine_pressure": r.valve_back_pressure,
-        "feed_flow": r.feed_flow,
-        "permeate_flow": r.permeate_flow,
-        "brine_flow": r.brine_flow,
-        "recovery": r.recovery * 100.0,
-        "flux": r.flux,
-        "permeate_tds": r.permeate_tds,
-        "brine_tds": r.brine_tds,
-        "rejection": r.rejection * 100.0,
-        "power": r.power,
-        "sec": r.sec,
-        "beta": mr.beta,
-    }
+def _style(layer, title):
+    return (layer.properties(title=title, height=280)
+            .configure(background="transparent").configure_view(strokeWidth=0)
+            .configure_title(color=INK, fontSize=14, anchor="start")
+            .configure_axis(labelColor=INK, titleColor=INK, labelFontSize=11,
+                            titleFontSize=12, gridColor=GRID, domainColor=INK, tickColor=INK))
 
 
-# ---------------------------------------------------------------------------
-# 3 — inputs
-# ---------------------------------------------------------------------------
-def _inputs(e: X.Experiment) -> None:
-    def kv(k, v, u):
-        return f'<div class="fx-kv"><span class="k">{k}</span><span class="v">{v}<small>{u}</small></span></div>'
-
-    drive = (
-        '<div class="fx-box drive"><h4>Simulation inputs — the two knobs</h4>'
-        f'<p class="sub">Taken from {e.label}; these set the operating point.</p>'
-        + kv("VFD frequency", _fmt(e.frequency, 1), "Hz")
-        + kv("Valve resistance K", _fmt(e.valve_resistance, 3), "bar/(m³/h)²")
-        + f'<p class="sub" style="margin:.4rem 0 0">K = brine pressure ÷ brine flow² = '
-          f'{_fmt(e.raw.get("brine_pressure"), 2)} ÷ {_fmt(e.raw.get("brine_flow"), 2)}² — '
-          'the hand-wheel position is not recorded, so the valve enters by its effect.</p>'
-        + '</div>'
-    )
-    cond = (
-        '<div class="fx-box drive"><h4>Feed conditions</h4>'
-        f'<p class="sub">Also from {e.label}; they enter the membrane model.</p>'
-        + kv("Feed salinity (TDS)", _fmt(e.feed_tds, 0), "mg/L")
-        + kv("Feed temperature", _fmt(e.feed_temperature, 1), "°C")
-        + '</div>'
-    )
-    fixed = (
-        '<div class="fx-box"><h4>Held at model defaults</h4>'
-        '<p class="sub">Not in the workbook; not adjusted.</p>'
-        + kv("Pump health", "1.00", "")
-        + kv("Membrane fouling factor", "1.00", "")
-        + kv("Gauge-to-gauge loss ΔP (measured median)", f"{S.DP_GAUGES:.2f}", "bar")
-        + kv("Share of it upstream of the element", f"{S.UPSTREAM_SHARE*100:.0f}", "%")
-        + kv("Membrane salt passage (5-yr element)", f"× {membrane.PLANT_SALT_PASSAGE:.2f}", "")
-        + '</div>'
-    )
-    st.markdown(f'<div class="fx-grid">{drive}{cond}{fixed}</div>', unsafe_allow_html=True)
-    st.caption("Pressure, flows, salinities and energy are solved by the model from these "
-               "inputs. Because K is formed from the measured brine pressure, the simulated "
-               "brine pressure follows it closely by construction — that row is not a test.")
-    if e.notes:
-        with st.expander("Conversions applied when reading the workbook"):
-            for n in e.notes:
-                st.markdown(f"- {n}")
+def _dot(df, x, y, tips):
+    return alt.Chart(df).mark_point(size=170, color=MODEL, filled=True,
+                                    stroke="#FFFFFF", strokeWidth=1.4).encode(
+        x=alt.X(f"{x}:Q"), y=alt.Y(f"{y}:Q"), tooltip=tips)
 
 
-# ---------------------------------------------------------------------------
-# 4 — comparison
-# ---------------------------------------------------------------------------
-def _comparison(sim: dict, lab: dict) -> None:
-    body = []
-    for key, label, unit, d in ROWS:
-        s, lv = sim.get(key), lab.get(key)
-        L = lv.value if lv else None
-        if _ok(s) and _ok(L):
-            diff = s - L
-            pct = f"{100.0 * diff / abs(L):+.1f} %" if L != 0 else "—"
-            diff_s = f"{diff:+,.{d}f}"
-        else:
-            pct, diff_s = "—", "—"
-        basis = BASIS_TEXT.get(lv.basis, "") if lv else ""
-        body.append(
-            f'<tr id="cmp-{key}">'
-            f'<td>{label}<span class="u">{unit}</span></td>'
-            f'<td>{_fmt(L, d)}<span class="basis">{basis}</span></td>'
-            f'<td class="sim">{_fmt(s, d)}</td>'
-            f'<td>{diff_s}</td>'
-            f'<td class="pct">{pct}</td>'
-            f'<td><a class="fx-jump" href="#eq-{key}" target="_self">Equation ↓</a></td>'
-            '</tr>'
-        )
-    head = ("<tr><th>Quantity</th><th>Lab</th><th>Simulation</th>"
-            "<th>Difference<br>(sim − lab)</th><th>% of lab</th><th></th></tr>")
-    st.markdown(f'<div class="fx-wrap"><table class="fx-cmp">{head}{"".join(body)}</table></div>',
-                unsafe_allow_html=True)
-    st.caption("% of lab = 100 · (simulation − lab) / |lab|. A positive value means the "
-               "simulation is above the lab figure. Under each lab value: whether it was "
-               "measured directly, formed from this experiment's measurements, calculated "
-               "inside the workbook, or used to set the valve resistance K (so not a test).")
+def _maps(r, feed, sweep_v, sweep_f) -> None:
+    st.markdown("**Performance maps** — the current point is the amber dot")
+
+    # 1) recovery vs valve resistance (at current frequency)
+    rv = pd.DataFrame([{"k": s.valve_resistance, "rec": s.recovery * 100} for s in sweep_v])
+    c1 = _style(alt.layer(
+        alt.Chart(rv).mark_line(color=LINE, strokeWidth=3, clip=True).encode(
+            x=alt.X("k:Q", title="Valve resistance K (bar per (m³/h)²)",
+                    scale=_xscale(list(S.K_SWEEP))),
+            y=alt.Y("rec:Q", title="Recovery (%)")),
+        _dot(pd.DataFrame([{"k": r.valve_resistance, "rec": r.recovery * 100}]), "k", "rec",
+             [alt.Tooltip("k:Q", format=".3f", title="K"),
+              alt.Tooltip("rec:Q", format=".1f", title="recovery")])),
+        "Recovery vs valve resistance")
+
+    # 2) SEC vs recovery (sweeping the valve) — the optimisation curve
+    sr = pd.DataFrame([{"rec": s.recovery * 100, "sec": s.sec}
+                       for s in sweep_v if s.permeate_flow > 0 and math.isfinite(s.sec)])
+    layers2 = [alt.Chart(sr).mark_line(color=LINE, strokeWidth=3, clip=True).encode(
+        x=alt.X("rec:Q", title="Recovery (%)"),
+        y=alt.Y("sec:Q", title="SEC (kWh/m³)", scale=alt.Scale(zero=False)))]
+    if r.permeate_flow > 0 and math.isfinite(r.sec):
+        layers2.append(_dot(pd.DataFrame([{"rec": r.recovery * 100, "sec": r.sec}]), "rec", "sec",
+                            [alt.Tooltip("rec:Q", format=".1f", title="recovery"),
+                             alt.Tooltip("sec:Q", format=".1f", title="SEC")]))
+    c2 = _style(alt.layer(*layers2), "Specific energy vs recovery")
+
+    # 3) permeate flow vs frequency (at current valve)
+    pf = pd.DataFrame([{"f": s.frequency, "qp": s.permeate_flow} for s in sweep_f])
+    c3 = _style(alt.layer(
+        alt.Chart(pf).mark_line(color=LINE, strokeWidth=3, clip=True).encode(
+            x=alt.X("f:Q", title="VFD frequency (Hz)", scale=_xscale([24, 60])),
+            y=alt.Y("qp:Q", title="Permeate flow (m³/h)")),
+        _dot(pd.DataFrame([{"f": r.frequency, "qp": r.permeate_flow}]), "f", "qp",
+             [alt.Tooltip("f:Q", format=".0f"), alt.Tooltip("qp:Q", format=".2f", title="permeate")])),
+        "Production vs frequency (valve untouched)")
+
+    a, b = st.columns(2)
+    a.altair_chart(c1, theme=None, width='stretch')
+    b.altair_chart(c2, theme=None, width='stretch')
+    st.altair_chart(c3, theme=None, width='stretch')
+    st.caption("Close the valve (raise K) → recovery rises and SEC falls; raise the frequency "
+               "with the valve untouched → more feed, higher pressure (P_b = K·Q²) and more "
+               "product. The SEC–recovery curve is the basis for choosing the best operating point.")
 
 
-# ---------------------------------------------------------------------------
-# 5 — equations
-# ---------------------------------------------------------------------------
-def _equations(r, mr, vr) -> dict:
-    sw, s5, s6 = r.worked, mr.step_worked.get("step5", {}), mr.step_worked.get("step6", {})
-    P = r.operating_pressure
-    cf = pump.v("calc_factor")
-    power_tex = (rf"P_{{shaft}} = \frac{{16.7\,Q_f\,P}}{{{cf:g}}} = "
-                 rf"\frac{{16.7\times {r.feed_flow:.2f}\times {P:.2f}}}{{{cf:g}}}"
-                 rf" = {r.power:.2f}\ \mathrm{{kW}}")
-    dpg = S.DP_GAUGES
-
-    def pick(d, *keys):
-        return [d[k] for k in keys if k in d]
-
-    return {
-        "operating_pressure": (
-            "Solved, not set. The pump delivers its flow at this pressure; the membrane splits it at "
-            f"pressure P; the valve must pass the brine. P is found by bisection where the "
-            f"valve back-pressure K·Qb² equals the brine-gauge pressure P − ΔP_gauges "
-            f"(ΔP_gauges = {dpg:.2f} bar, measured median).",
-            pick(sw, "pressure", "brine_p", "p_mem")),
-        "brine_pressure": (
-            "Valve back-pressure at the solved brine flow. K came from this run's measured "
-            "brine pressure, so this value tracks the lab figure by construction.",
-            pick(vr.worked, "dp") + pick(sw, "brine_p")),
-        "feed_flow": (
-            "Positive-displacement pump (Danfoss data): geometric flow at the slipped shaft "
-            "speed, less the internal leakage that grows with the outlet pressure.",
-            pick(sw, "rpm", "leak", "qfeed")),
-        "permeate_flow": (
-            "CH9 Step 5 at the element inlet pressure: water permeability at T, net driving "
-            "pressure, flux, then permeate flow.",
-            pick(sw, "p_mem") + pick(s5, "kwT", "ndp", "flux", "qp")),
-        "brine_flow": (
-            "Mass balance on the element.",
-            pick(sw, "balance") + pick(s5, "qc")),
-        "recovery": ("Permeate over feed.", pick(sw, "recovery")),
-        "flux": ("CH9 Step 5 — solution-diffusion water flux.", pick(s5, "kwT", "ndp", "flux")),
-        "permeate_tds": (
-            "CH9 Step 6, flux-effect form: salt permeability Ks(T) of the 5-year element "
-            "(ESS minimum rejection, aged at the CH9 Table 4 rate) diluted by the flux J.",
-            [membrane.plant_salt_passage()["worked"][k] for k in ("ksmin", "ksplant", "factor")]
-            + pick(s6, "ksT", "cp_flux")),
-        "brine_tds": ("CH9 Step 5 — concentration build-up at the solved recovery.",
-                      pick(s5, "cc")),
-        "rejection": ("CH9 Step 6.", pick(s6, "cp_flux", "rej")),
-        "power": ("Danfoss absorbed-power equation at the solved pressure "
-                  "(calc-factor includes pump efficiency).", [power_tex]),
-        "sec": ("Shaft power per m³ of permeate.", pick(sw, "sec")),
-        "beta": ("CH9 Step 5 — concentration-polarisation factor.", pick(s5, "qc", "beta")),
-    }
-
-
-def _equation_section(eqs: dict, lab: dict) -> None:
-    for key, label, unit, _ in ROWS:
-        intro, lines = eqs.get(key, ("", []))
+def _assumptions():
+    with st.expander("Assumptions & limits", expanded=False):
         st.markdown(
-            f'<div class="fx-eqhead" id="eq-{key}"><span>{label} <em>{unit}</em></span>'
-            f'<a class="fx-back" href="#cmp-{key}" target="_self">↑ Back to comparison</a></div>',
-            unsafe_allow_html=True)
-        if intro:
-            st.caption(intro)
-        for tex in lines:
-            st.latex(tex)
-        lv = lab.get(key)
-        if lv and lv.how:
-            st.caption("Lab side, formed from this experiment's readings:")
-            st.latex(lv.how)
+            "- **Steady state**, single element; the plant is solved for one operating "
+            "pressure that balances the pump, membrane and valve.\n"
+            "- **Two controls only** — VFD frequency and the brine valve — matching the plant.\n"
+            "- **The valve is described by its measured resistance K** (brine pressure ÷ "
+            "brine flow²). The hand-wheel position is not recorded, so no opening %, Cv "
+            "curve or cavitation model is assumed.\n"
+            f"- **Gauge-to-gauge loss ΔP_gauges = {S.DP_GAUGES:.2f} bar** — measured median "
+            "of Exp 1–9, between the pump-discharge gauge and the brine-strainer gauge. Half "
+            "of the loss outside the element is placed upstream of it (model assumption).\n"
+            "- **Pump flow** = geometric flow at the slipped speed minus pressure-driven "
+            "internal leakage (Danfoss data).\n"
+            "- **Membrane**: catalogue water permeability; salt permeability of a 5-year "
+            "element (ESS minimum rejection aged at the CH9 Table 4 rate). Nothing is "
+            "fitted to the plant data.\n"
+            "- Feed salinity and temperature come from your readings; feed salinity is a grab "
+            "sample.\n"
+            "- At seawater salinity the valve throttles 30–60 bar across one seat, so "
+            "cavitation is expected in normal operation (CF8M body). It is a wear note, not "
+            "part of the calculation."
+        )
 
 
-def _full_steps(mr) -> None:
-    titles = {"step1": "Step 1 — preliminary concentrations",
-              "step2": "Step 2 — design flux → permeate flow",
-              "step3": "Step 3 — permeabilities Kw, Ks at 25 °C",
-              "step4": "Step 4 — preliminary feed pressure",
-              "step5": "Step 5 — flows, recovery, β (iterated)",
-              "step6": "Step 6 — permeate quality",
-              "step7": "Step 7 — cross-flow velocity"}
-    with st.expander("Full membrane working — CH9 Steps 1–7 at the solved pressure"):
-        st.caption("Steps 1, 2 and 4 are design relations shown at the solved point; "
-                   "Steps 5–7 are what the model solves.")
-        for k, t in titles.items():
-            lines = mr.step_worked.get(k) or {}
-            if lines:
-                st.markdown(f"**{t}**")
-                for body in lines.values():
-                    st.latex(body)
+def render(controls: dict, feed: dict) -> None:
+    from core import modes as M
 
+    freq_manual = controls.get("frequency", 60.0)
+    k_manual = controls.get("valve_resistance", M.K_DEFAULT)
+    tds = feed.get("tds", 41000.0)
+    temp = feed.get("temperature", 28.0)
 
-# ---------------------------------------------------------------------------
-# page
-# ---------------------------------------------------------------------------
-def render(controls: dict | None = None, feed: dict | None = None) -> None:
-    st.markdown(CSS, unsafe_allow_html=True)
-    st.header("Full system — with experiments")
-    st.caption("Drive the full coupled plant with the settings and feed conditions of one "
-               "lab experiment, then set the simulated results beside what the plant measured.")
+    st.subheader("Operating mode")
+    mode = st.segmented_control("mode", M.MODE_NAMES, default="Manual",
+                                label_visibility="collapsed") or "Manual"
+    target_pct = None
+    if mode == "Target":
+        target_pct = st.number_input("Target recovery (%)", min_value=1.0,
+                                     max_value=20.0, value=10.0, step=0.5)
+    with st.expander("What the modes do", expanded=False):
+        for name in M.MODE_NAMES:
+            st.markdown(f"**{name}** — {M.GOALS[name]}")
 
-    # 1 — workbook
-    _step(1, "Load the experiment workbook")
-    up = st.file_uploader("Experiment workbook (.xlsx)", type=["xlsx", "xlsm"],
-                          label_visibility="collapsed")
-    if up is None:
-        st.info("Upload the workbook with the “Readings” sheet — one column per "
-                "experiment (Exp 1, Exp 2, …). The number of experiments is read from it.")
-        return
-    try:
-        wb = _parse(up.getvalue())
-    except X.WorkbookError as err:
-        st.error(f"The workbook could not be read: {err}")
-        return
-    except Exception as err:  # corrupt file, not an xlsx, …
-        st.error(f"The file could not be opened as a workbook ({type(err).__name__}: {err}).")
-        return
-
-    # 2 — experiment
-    _step(2, "Choose the experiment")
-    st.caption(f"{wb.count} experiments found on sheet “{wb.sheet}”.")
-    labels = [e.label for e in wb.experiments]
-    pills = getattr(st, "pills", None)
-    if pills:
-        choice = pills("Experiment", labels, selection_mode="single", default=labels[0],
-                       label_visibility="collapsed") or labels[0]
+    note = ""
+    if mode == "Manual":
+        freq, k = freq_manual, k_manual
     else:
-        choice = st.selectbox("Experiment", labels, label_visibility="collapsed")
-    e = wb.experiments[labels.index(choice)]
+        freq, k, rec, note = M.recommend(mode, tds, temp, target_pct or 10.0)
+        msg = (f"**{mode}** → recommended setpoints: VFD **{freq:.0f} Hz**, valve resistance "
+               f"**K = {k:.3f}** — turn the hand-wheel until the brine gauge reads "
+               f"**{rec.valve_back_pressure:.1f} bar**.  _{M.GOALS[mode]}_  "
+               "(The sidebar knobs are overridden in this mode.)")
+        if note:
+            msg += f"\n\n{note}"
+        st.info(msg)
 
-    # 3 — inputs
-    _step(3, f"Simulation inputs for {e.label}")
-    _inputs(e)
-    if not all(_ok(x) for x in (e.frequency, e.valve_resistance, e.feed_tds, e.feed_temperature)):
-        st.error(f"{e.label} is missing an input (frequency, brine pressure / flow, feed TDS "
-                 "or temperature), so it cannot be simulated.")
-        return
+    r = S.simulate(freq, k, tds, temp)
 
-    r, mr, vr = _solve(e.frequency, e.valve_resistance, e.feed_tds, e.feed_temperature)
-    if not r.converged:
-        st.info("The solver found no pressure balance inside 0.1–82.7 bar for these "
-                "inputs; the values below are at the nearest bound.")
     if r.warnings:
-        with st.expander("Model notes at this operating point"):
-            for w in r.warnings:
-                st.markdown(f"- {w}")
+        st.warning("Notes:  " + "  •  ".join(r.warnings))
 
-    sim = _sim_values(r, mr)
-    lab = X.lab_results(e, area=membrane.p("area"))
+    st.subheader("Plant KPIs")
+    _kpis(r)
 
-    # 4 — comparison
-    _step(4, "Lab vs simulation")
-    _comparison(sim, lab)
+    st.divider()
+    _streams(r)
+    _coupling(r)
 
-    # 5 — equations
-    _step(5, "How each simulated value was calculated")
-    st.caption(f"Every line is the model's own equation with {e.label}'s numbers substituted.")
-    _equation_section(_equations(r, mr, vr), lab)
-    st.markdown("")
-    _full_steps(mr)
+    st.divider()
+    sweep_v = S.sweep_valve(freq, tds, temp)
+    sweep_f = S.sweep_frequency(k, tds, temp)
+    _maps(r, feed, sweep_v, sweep_f)
+
+    st.divider()
+    _assumptions()
