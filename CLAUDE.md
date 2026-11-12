@@ -17,11 +17,22 @@ is NOT our plant. We are a single element at R≈10%. Only the
 single-element solution-diffusion laws apply.
 
 ## Hardware
-- Pump: Danfoss APP 11 / 1500 (axial-piston positive-displacement)
-  - D = 137 cm³/rev, Q_rated = 11.1 m³/h at 1500 rpm, k = 475
+- Pump: Danfoss APP 11 / 1500 (axial-piston positive-displacement, code 180B3211)
+  - D = 137 cm³/rev, Q_rated = 11.4 m³/h at the rated point (1480 rpm, 60 bar),
+    calc factor k = 475, max continuous speed 1500 rpm
+  - Delivered flow = D·n − leakage; leakage 0.77 m³/h at 60 bar, ∝ pressure
+  - 4-pole motor, 30·f synchronous, slip 1480/1500 → 29.6·f; at 60 Hz ≈ 1776 rpm
+    (above the 1500 rpm max — flagged by the model)
 - Membrane: Hydranautics SWC4 MAX (single element, 8"×40", 40.9 m²)
-  - SR = 99.8%, Kw ≈ 0.99 L/m²·bar·h, Ks ≈ 0.056 L/m²·h (at 25°C)
-- Valve: brine outlet 198-VBR-001 (variable Cv)
+  - SR = 99.8% (99.7% min), Kw ≈ 0.99 L/m²·bar·h, Ks ≈ 0.056 L/m²·h (at 25°C)
+  - Installed element is 5 years old (end-of-life element on test): the
+    system model uses Ks at 99.7% aged 10%/yr (CH9 Table 4) → ×2.42
+  - Max pressure drop per element 15 psi (≈1.0 bar)
+- Valve: brine outlet 198-VBR-001 (NORITON 1½″, CF8M, Class 600), turned by
+  hand, position NOT measured → described by its measured resistance
+  K = P_brine / Q_brine² (bar per (m³/h)²); no Cv curve is assumed
+- Gauges: feed = pump discharge ("HP discharge PG"), brine = brine strainer;
+  measured gap between them ≈ 4.5 bar (median Exp 1–9)
 - Operating target: Cf = 41,000 mg/L, T = 25 °C, R ≈ 10%
 
 ## Repository layout
@@ -29,7 +40,9 @@ single-element solution-diffusion laws apply.
   - `pump.py`, `membrane.py`, `valve.py` — standalone component models
   - `system.py` — couples the three; solves the single operating pressure
   - `modes.py` — operating-mode definitions
-- `*_page.py` — Streamlit UI for each block
+  - `experiments.py` — reads the lab workbook (sheet "Readings")
+- `*_page.py` — Streamlit UI for each block; `experiments_page.py` is
+  "Full system - with Experiments" (lab vs simulation)
 - `app.py` — main Streamlit entry point
 - `schematic.py` — P&ID-style flow diagram
 
@@ -49,4 +62,5 @@ single-element solution-diffusion laws apply.
   stating the new reference
 - Replace the single-element formulation with the multi-element plant
   formulation from CH9 — our plant is one element
+- Fit model parameters to the same experiments used to judge the model
 - Add new dependencies without updating `requirements.txt`
