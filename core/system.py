@@ -18,10 +18,21 @@ So we solve for the single P where
 
     K · ( Q_feed - Qp(P) )²  =  P - ΔP_gauges
 
-ΔP_gauges is the MEASURED difference between the feed and brine gauges (median
-of Exp 1–9). Where along the skid that loss happens is not known; here it is
-treated as a loss between the feed gauge and the valve that does not change the
-membrane's own driving pressure (the membrane keeps its ΔPe = 0.2 bar).
+ΔP_gauges is the MEASURED difference between the feed gauge (at the pump
+discharge, "HP discharge PG") and the brine gauge (at the brine strainer). The
+element itself accounts for at most 1 bar of it (ESS: 15 psi max per element);
+the rest is piping, fittings and the strainer. Half of the outside-element loss
+is placed upstream of the element, so the element inlet sees
+
+    P_in = P − (ΔP_gauges − ΔPe)/2
+
+and its mean pressure is the mean of the two gauges. This placement is a model
+assumption, chosen because it matched the measured permeate flow best of the
+four placements tested on Exp 1–9 (membrane run at the measured pressures).
+
+The pump flow depends on the outlet pressure (internal leakage), so the feed
+flow is solved together with P. The installed element is 5 years old: the
+membrane is run with the plant salt-passage factor (core/membrane.py).
 
 Raise K (close the valve) -> higher P -> more permeate -> higher recovery.
 """
@@ -43,28 +54,41 @@ class Spec:
 
 PARAMS: dict[str, Spec] = {
     "dP_gauges": Spec(4.48, "bar",
-                      "Pressure difference between the feed and brine gauges — median of "
-                      "Exp 1–9 (range 3.65 – 8.62; Exp 1 is an outlier). Treated as a loss "
-                      "between the feed gauge and the valve.",
+                      "Pressure difference between the feed gauge (pump discharge) and the "
+                      "brine gauge (brine strainer) — median of Exp 1–9 (range 3.65 – 8.62; "
+                      "Exp 1 is an outlier)",
                       "Measured: RO Operating Readings, Exp 1–9, row 'Feed − Brine Gauge ΔP'"),
+    "upstream_share": Spec(0.5, "—",
+                           "Share of the outside-element loss placed upstream of the element "
+                           "(element at the mid-point between the gauges)",
+                           "Model assumption; best of four placements tested against Exp 1–9"),
 }
 
 DP_GAUGES = PARAMS["dP_gauges"].value
-ELEMENT_DP = membrane.p("dPe")   # used inside the membrane model only (NDP)
+UPSTREAM_SHARE = PARAMS["upstream_share"].value
+ELEMENT_DP = membrane.p("dPe")   # element's own loss, used inside the membrane NDP
 P_MIN, P_MAX = 0.1, 82.7         # search bounds (bar); 82.7 = membrane max
 
 
-def feed_flow(frequency_hz: float, health: float = 1.0) -> float:
-    """Feed flow the PD pump delivers (independent of pressure)."""
-    return pump.nominal_flow(pump.rpm_from_frequency(frequency_hz)) * health
+def feed_flow(frequency_hz: float, pressure: float, health: float = 1.0) -> float:
+    """Feed flow the PD pump delivers at this outlet pressure (core/pump.py)."""
+    return pump.nominal_flow(pump.rpm_from_frequency(frequency_hz), pressure) * health
 
 
-def _state(P, resistance, feed_tds, temperature, q_feed, fouling):
-    mr = membrane.simulate(P, feed_tds, temperature, q_feed, fouling)
+def membrane_inlet_pressure(P: float) -> float:
+    """Element inlet pressure from the feed-gauge pressure P:
+    P_in = P − share·(ΔP_gauges − ΔPe)."""
+    return P - UPSTREAM_SHARE * (DP_GAUGES - ELEMENT_DP)
+
+
+def _state(P, resistance, feed_tds, temperature, frequency_hz, health, fouling, salt_passage):
+    q_feed = feed_flow(frequency_hz, P, health)
+    mr = membrane.simulate(membrane_inlet_pressure(P), feed_tds, temperature, q_feed,
+                           fouling, salt_passage)
     qb = max(q_feed - mr.permeate_flow, 0.0)
     vr = valve.simulate(resistance, qb)
     residual = vr.delta_p - (P - DP_GAUGES)
-    return residual, mr, qb, vr
+    return residual, mr, qb, vr, q_feed
 
 
 @dataclass
@@ -93,15 +117,19 @@ class SystemResult:
     kpis: dict = field(default_factory=dict)
     warnings: list = field(default_factory=list)
     worked: dict = field(default_factory=dict)
+    membrane_pressure: float = 0.0      # element inlet pressure [bar]
+    membrane: object = None             # the MembraneResult at the solved point
+    pump_warnings: list = field(default_factory=list)
 
 
 def simulate(frequency_hz: float, valve_resistance: float, feed_tds: float,
              temperature: float, health: float = 1.0, fouling: float = 1.0,
-             suction: float = 3.0) -> SystemResult:
-    q_feed = feed_flow(frequency_hz, health)
+             suction: float = 3.0, salt_passage: float | None = None) -> SystemResult:
+    sp = membrane.PLANT_SALT_PASSAGE if salt_passage is None else salt_passage
 
     def res(P):
-        return _state(P, valve_resistance, feed_tds, temperature, q_feed, fouling)[0]
+        return _state(P, valve_resistance, feed_tds, temperature, frequency_hz,
+                      health, fouling, sp)[0]
 
     lo, hi = P_MIN, P_MAX
     flo, fhi = res(lo), res(hi)
@@ -123,7 +151,10 @@ def simulate(frequency_hz: float, valve_resistance: float, feed_tds: float,
                 lo, flo = mid, fm
         P = 0.5 * (lo + hi)
 
-    _, mr, qb, vr = _state(P, valve_resistance, feed_tds, temperature, q_feed, fouling)
+    _, mr, qb, vr, q_feed = _state(P, valve_resistance, feed_tds, temperature,
+                                   frequency_hz, health, fouling, sp)
+    p_in = membrane_inlet_pressure(P)
+    pw = pump.flow_worked(frequency_hz, P, health)
     power = pump.shaft_power(q_feed, P)
     qp = mr.permeate_flow
     recovery = (qp / q_feed) if q_feed > 0 else 0.0
@@ -131,9 +162,12 @@ def simulate(frequency_hz: float, valve_resistance: float, feed_tds: float,
     K = valve_resistance
 
     worked = {
-        "qfeed": (rf"Q_{{feed}} = Q_{{rated}}\,\frac{{n}}{{1500}}\,h = "
-                  rf"{pump.v('rated_flow')}\times\frac{{{pump.rpm_from_frequency(frequency_hz):.0f}}}"
-                  rf"{{1500}}\times {health:.2f} = {q_feed:.2f}\ \mathrm{{m^3/h}}"),
+        "rpm": pw["rpm"],
+        "leak": pw["leak"],
+        "qfeed": pw["flow"].replace("Q =", r"Q_{feed} =", 1),
+        "p_mem": (rf"P_{{in}} = P - \tfrac{{1}}{{2}}(\Delta P_{{gauges}} - \Delta P_e)"
+                  rf" = {P:.2f} - \tfrac{{1}}{{2}}({DP_GAUGES:.2f} - {ELEMENT_DP:g})"
+                  rf" = {p_in:.2f}\ \mathrm{{bar}}"),
         "balance": (rf"Q_{{feed}} = Q_p + Q_b:\quad {q_feed:.2f} = {qp:.2f} + {qb:.2f}"),
         "pressure": (rf"\text{{solve }}P:\ K\,Q_b^2 = P-\Delta P_{{gauges}}"
                      rf"\ \Rightarrow\ {K:.3f}\times {qb:.2f}^2 = {P:.2f} - {DP_GAUGES:.2f}"
@@ -151,6 +185,8 @@ def simulate(frequency_hz: float, valve_resistance: float, feed_tds: float,
         brine_tds=mr.brine_tds, recovery=recovery, flux=mr.flux,
         rejection=mr.rejection, sec=sec, power=power,
         valve_back_pressure=vr.delta_p, converged=converged, worked=worked,
+        membrane_pressure=p_in, membrane=mr,
+        pump_warnings=pump._check_limits(pump.rpm_from_frequency(frequency_hz), P, suction),
     )
     r.kpis = {
         "recovery": recovery * 100.0, "flux": mr.flux,
@@ -170,6 +206,8 @@ def _warnings(r, mr, vr):
     if r.operating_pressure > pump.v("outlet_max"):
         w.append(f"operating pressure {r.operating_pressure:.0f} bar exceeds the pump "
                  f"outlet max ({pump.v('outlet_max'):.0f} bar) — open the valve (lower K)")
+    for m in r.pump_warnings:
+        w.append("pump: " + m)
     for m in mr.warnings:
         w.append("membrane: " + m)
     for m in vr.warnings:
