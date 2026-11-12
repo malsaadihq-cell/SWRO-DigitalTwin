@@ -15,8 +15,17 @@ are taken from CH9; its worked example (a 72-element, 6-per-vessel,
 
 Measured quantities (feed pressure, feed TDS, temperature, feed flow)
 are inputs the user records at the plant. Kw and Ks start from the values
-the book derives from the element's standard test; they are parameters,
-to be replaced by calibration once plant measurements exist.
+the book derives from the element's standard test.
+
+Condition of the installed element
+----------------------------------
+simulate() describes a NEW element by default (catalogue Kw and Ks), so the
+block stays a clean reference. The installed element is 5 years old and comes
+from a test rig for end-of-life elements, so the full-system model passes a
+salt-passage factor (see plant_salt_passage()): Ks is derived with the CH9
+Step-3 method at the ESS MINIMUM rejection (99.7 %), then aged with the
+Hydranautics salt-passage increase from CH9 Table 4. Nothing is fitted to the
+plant data.
 """
 from __future__ import annotations
 
@@ -25,6 +34,7 @@ from dataclasses import dataclass, field
 
 ESS = "Hydranautics SWC4 MAX element specification sheet"
 CH9 = "IWA 2021, Ch. 9"
+PLANT = "Plant information, WRC Rabigh (element age; end-of-life element on test)"
 
 
 @dataclass(frozen=True)
@@ -48,6 +58,13 @@ PARAMS: dict[str, Spec] = {
                 "Permeate flow in the standard test (27.3 m³/d)", ESS),
     "SR": Spec(0.998, "—",
                "Nominal salt rejection used for the brine-concentration build-up", ESS),
+    "SR_min": Spec(0.997, "—",
+                   "Minimum guaranteed salt rejection of a new element", ESS),
+    "age": Spec(5.0, "years",
+                "Service age of the installed element", PLANT),
+    "sp_increase": Spec(0.10, "per year",
+                        "Salt-passage increase per year of service (Hydranautics, upper "
+                        "guideline value)", CH9 + ", Table 4, p. 248"),
     "osmotic_coeff": Spec(0.8, "bar per 1000 mg/L",
                           "Osmotic-pressure rule of thumb", CH9 + ", p. 251"),
     "dPe": Spec(0.2, "bar",
@@ -158,6 +175,48 @@ KW25 = _DERIV["Kw25"]
 KS25 = _DERIV["Ks25"]
 
 
+def ks25_at_rejection(sr: float) -> float:
+    """Ks at 25 °C from the ESS standard test for a given rejection — the same
+    CH9 Step-3 method as above (p. 252), with SR as the input:
+
+        Ccs = Cfs·[1 − Re(1−SR)]/(1 − Re),  Cfcs = (Cfs + Ccs)/2,
+        Cps = Cfcs·(1 − SR),                Ks = Jws·Cps/Cfcs
+    """
+    Cfs, Re, Qws, A = p("Cfs"), p("Re_std"), p("Qws"), p("area")
+    Ccs = Cfs * (1 - Re * (1 - sr)) / (1 - Re)
+    Cfcs = (Cfs + Ccs) / 2
+    Jws = Qws * 1000.0 / A
+    return Jws * Cfcs * (1 - sr) / Cfcs
+
+
+def plant_salt_passage() -> dict:
+    """Salt-passage factor of the INSTALLED element relative to the catalogue Ks:
+
+        Ks,new,min = Ks(SR_min = 99.7 %)              (ESS minimum, CH9 Step 3)
+        Ks,plant   = Ks,new,min · (1 + 0.10)^age      (CH9 Table 4, Hydranautics)
+        factor     = Ks,plant / Ks25
+
+    No plant measurement is used — the factor comes from the ESS, CH9 and the
+    element age only.
+    """
+    ks_min = ks25_at_rejection(p("SR_min"))
+    growth = (1.0 + p("sp_increase")) ** p("age")
+    ks_plant = ks_min * growth
+    factor = ks_plant / KS25
+    worked = {
+        "ksmin": (rf"K_{{s,min}} = K_s(SR_{{min}}={p('SR_min')*100:.1f}\%) = {ks_min:.4f}"
+                  rf"\ \mathrm{{L/m^2 h}}"),
+        "ksplant": (rf"K_{{s,plant}} = K_{{s,min}}\,(1+{p('sp_increase'):.2f})^{{{p('age'):.0f}}}"
+                    rf" = {ks_min:.4f}\times {growth:.3f} = {ks_plant:.4f}\ \mathrm{{L/m^2 h}}"),
+        "factor": (rf"f_{{sp}} = K_{{s,plant}}/K_{{s,25}} = {ks_plant:.4f}/{KS25:.4f}"
+                   rf" = {factor:.2f}"),
+    }
+    return dict(ks_min=ks_min, ks_plant=ks_plant, factor=factor, worked=worked)
+
+
+PLANT_SALT_PASSAGE = plant_salt_passage()["factor"]
+
+
 # --- operating envelope (all from the ESS) ---------------------------
 ENVELOPE = {
     "max_pressure": (82.7, "bar", "max applied pressure (1200 psig)"),
@@ -193,9 +252,10 @@ def kw_at(temperature: float, fouling: float) -> float:
     return KW25 * fouling * p("temp_coeff") ** (temperature - 25.0)
 
 
-def ks_at(temperature: float) -> float:
-    """Salt permeability at temperature: Ks(T) = Ks25 · 1.03^(T−25)."""
-    return KS25 * p("temp_coeff") ** (temperature - 25.0)
+def ks_at(temperature: float, salt_passage: float = 1.0) -> float:
+    """Salt permeability at temperature, with a salt-passage multiplier
+    (1.0 = new element): Ks(T) = Ks25 · f_sp · 1.03^(T−25)."""
+    return KS25 * salt_passage * p("temp_coeff") ** (temperature - 25.0)
 
 
 # ---------------------------------------------------------------------
@@ -306,7 +366,7 @@ def step5_flows_recovery_beta(feed_pressure: float, feed_tds: float, temperature
         "flux": (rf"J = K_w(T)\,NDP = {Kw:.3f}\times {ndp:.1f} = {J:.1f}\ \mathrm{{L/m^2 h}}"),
         "qp": (rf"Q_p = J\,A/1000 = {J:.1f}\times {A}/1000 = {Qp:.2f}\ \mathrm{{m^3/h}}"),
         "rec": (rf"R = Q_p/Q_f = {Qp:.2f}/{feed_flow:.2f} = {recovery*100:.1f}\%"),
-        "qc": (rf"Q_c = Q_f - Q_p = {feed_flow:.2f} - {Qp:.2f} = {Qc:.2f}\ \mathrm{{m^3/h}},\quad"
+        "qc": (rf"Q_c = Q_f - Q_p = {feed_flow:.2f} - {Qp:.2f} = {Qc:.2f}\ \mathrm{{m^3/h}},\quad "
                rf"Q_{{fc}} = \frac{{Q_f+Q_c}}{{2}} = {Qfc:.2f}\ \mathrm{{m^3/h}}"),
         "beta": (rf"\beta = K_p\,e^{{Q_p/Q_{{fc}}}} = {p('Kp')}\,e^{{{Qp:.2f}/{Qfc:.2f}}}"
                  rf" = {beta:.2f}\quad(<{ENVELOPE['beta_max'][0]})"),
@@ -320,21 +380,28 @@ def step5_flows_recovery_beta(feed_pressure: float, feed_tds: float, temperature
 
 
 def step6_permeate_quality(cfc: float, flux: float, temperature: float,
-                           feed_tds: float) -> dict:
+                           feed_tds: float, salt_passage: float = 1.0) -> dict:
     """Step 6 — permeate quality, two formulations side by side (CH9 p. 259):
 
         Cp (constant SR)  = Cfc · (1 − SR)
         Cp (flux effect)  = Cfc · Ks(T) / J      ← the one simulate() uses
         rejection         = 1 − Cp_flux / Cf
+
+    `salt_passage` multiplies Ks (1.0 = new element; see plant_salt_passage()).
     """
     sr = p("SR")
-    Ks = ks_at(temperature)
+    Ks = ks_at(temperature, salt_passage)
     Cp_const = cfc * (1.0 - sr)
     Cp = (cfc * Ks / flux) if flux > 0 else 0.0
     rejection = (1.0 - Cp / feed_tds) if feed_tds > 0 else 0.0
+    if salt_passage == 1.0:
+        ks_str = (rf"K_s(T) = K_{{s,25}}\cdot 1.03^{{T-25}} = {KS25:.3f}\cdot 1.03^{{{temperature:.0f}-25}}"
+                  rf" = {Ks:.3f}\ \mathrm{{L/m^2 h}}")
+    else:
+        ks_str = (rf"K_s(T) = K_{{s,25}}\,f_{{sp}}\cdot 1.03^{{T-25}} = {KS25:.3f}\times {salt_passage:.2f}"
+                  rf"\cdot 1.03^{{{temperature:.0f}-25}} = {Ks:.3f}\ \mathrm{{L/m^2 h}}")
     worked = {
-        "ksT": (rf"K_s(T) = K_{{s,25}}\cdot 1.03^{{T-25}} = {KS25:.3f}\cdot 1.03^{{{temperature:.0f}-25}}"
-                rf" = {Ks:.3f}\ \mathrm{{L/m^2 h}}"),
+        "ksT": ks_str,
         "cp_const": (rf"C_p = C_{{fc}}(1-SR) = {cfc:.0f}\times {1 - sr:.3f} = {Cp_const:.1f}"
                      rf"\ \mathrm{{mg/L}}"),
         "cp_flux": (rf"C_p = \frac{{C_{{fc}}\,K_s(T)}}{{J}} = \frac{{{cfc:.0f}\times {Ks:.3f}}}{{{flux:.1f}}}"
@@ -406,10 +473,12 @@ class MembraneResult:
     crossflow_velocity: float = 0.0      # Step 7, vfc [m/s]
     qfc: float = 0.0                     # feed-concentrate avg flow [m³/h]
     step_worked: dict = field(default_factory=dict)   # {"step1": {...}, …, "step7": {...}}
+    salt_passage: float = 1.0            # Ks multiplier used (1.0 = new element)
 
 
 def simulate(feed_pressure: float, feed_tds: float, temperature: float,
-             feed_flow: float, fouling: float = 1.0) -> MembraneResult:
+             feed_flow: float, fouling: float = 1.0,
+             salt_passage: float = 1.0) -> MembraneResult:
     """Solve the single element at a given feed pressure (CH9 element-1
     procedure): Step 5 (iteration) → Step 6 (permeate quality) → Step 7
     (cross-flow velocity).
@@ -417,9 +486,12 @@ def simulate(feed_pressure: float, feed_tds: float, temperature: float,
     Steps 1, 2 and 4 are the design path (flux/recovery → pressure); they
     are evaluated at the solved flux and recovery only so their worked
     substitutions can be shown — they do not feed back into the result.
+
+    fouling multiplies Kw and salt_passage multiplies Ks; both default to 1.0,
+    a new element. The full-system model passes PLANT_SALT_PASSAGE.
     """
     s5 = step5_flows_recovery_beta(feed_pressure, feed_tds, temperature, feed_flow, fouling)
-    s6 = step6_permeate_quality(s5["Cfc"], s5["J"], temperature, feed_tds)
+    s6 = step6_permeate_quality(s5["Cfc"], s5["J"], temperature, feed_tds, salt_passage)
     s7 = step7_crossflow_velocity(feed_flow, s5["Qc"])
 
     R_design = min(max(s5["Re"], 0.0), 0.98)
@@ -455,7 +527,7 @@ def simulate(feed_pressure: float, feed_tds: float, temperature: float,
         beta=s5["beta"], element_dp=p("dPe"), kw_T=s5["Kw"], ks_T=s6["Ks"],
         worked=worked, converged=s5["converged"],
         permeate_tds_const_sr=s6["Cp_const_sr"], crossflow_velocity=s7["vfc"],
-        qfc=s7["Qfc"], step_worked=step_worked,
+        qfc=s7["Qfc"], step_worked=step_worked, salt_passage=salt_passage,
     )
     recovery, ndp, dpi = s5["Re"], s5["NDP"], s5["dpi"]
     result.kpis = {
@@ -554,30 +626,6 @@ def interpret(r: MembraneResult, measured: dict | None = None) -> list[tuple[str
                 f"Measured permeate TDS ({cpm:.0f} mg/L) is in line with the reference "
                 f"({clean.permeate_tds:.0f} mg/L)."))
     return msgs
-
-
-# ---------------------------------------------------------------------
-# Component-level validation (model vs plant). Measures the gap only —
-# no parameter is adjusted.
-# ---------------------------------------------------------------------
-VALIDATED_KPIS = ("permeate_flow", "permeate_tds", "brine_tds", "element_dp")
-
-
-def validate_membrane(result: MembraneResult, measured: dict,
-                      tolerances: dict | None = None) -> list["KpiComparison"]:
-    """Compare the predicted permeate_flow, permeate_tds, brine_tds and
-    element_dp against the measurements the caller supplies. Keys missing
-    (or None) in `measured` are skipped. KpiComparison lives in
-    core/validation.py and is imported lazily to avoid an import cycle."""
-    from .validation import compare_kpi, merged_tolerances
-    tol = merged_tolerances(tolerances)
-    out = []
-    for key in VALIDATED_KPIS:
-        y = measured.get(key)
-        if y is None:
-            continue
-        out.append(compare_kpi(key, getattr(result, key), y, tol[key]))
-    return out
 
 
 # ---------------------------------------------------------------------
