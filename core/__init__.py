@@ -15,7 +15,6 @@ from .membrane import (
     step5_flows_recovery_beta,
     step6_permeate_quality,
     step7_crossflow_velocity,
-    validate_membrane,
 )
 
 __all__ = [
@@ -23,5 +22,5 @@ __all__ = [
     "step1_preliminary_concentrations", "step2_flux_and_flow",
     "step3_permeabilities", "step4_feed_pressure",
     "step5_flows_recovery_beta", "step6_permeate_quality",
-    "step7_crossflow_velocity", "validate_membrane",
+    "step7_crossflow_velocity",
 ]
