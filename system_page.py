@@ -65,10 +65,8 @@ def _coupling(r: S.SystemResult) -> None:
                    "fixes the feed flow; the membrane turns part of it into permeate; the valve "
                    "must pass the brine and develops the back-pressure K·Qb². One pressure "
                    "balances all, with the measured gauge-to-gauge loss ΔP_gauges in between.")
-        st.latex(r.worked["qfeed"])
-        st.latex(r.worked["balance"])
-        st.latex(r.worked["pressure"])
-        st.latex(r.worked["brine_p"])
+        for key in ("rpm", "leak", "qfeed", "balance", "pressure", "brine_p", "p_mem"):
+            st.latex(r.worked[key])
         st.latex(r.worked["recovery"])
         st.latex(r.worked["sec"])
 
@@ -147,10 +145,13 @@ def _assumptions():
             "brine flow²). The hand-wheel position is not recorded, so no opening %, Cv "
             "curve or cavitation model is assumed.\n"
             f"- **Gauge-to-gauge loss ΔP_gauges = {S.DP_GAUGES:.2f} bar** — measured median "
-            "of Exp 1–9, treated as a loss between the feed gauge and the valve; the "
-            "membrane's own driving pressure uses ΔPe = 0.2 bar.\n"
-            "- Pump and membrane parameters are the block values (manufacturer / "
-            "standard-test); **not calibrated** to this unit.\n"
+            "of Exp 1–9, between the pump-discharge gauge and the brine-strainer gauge. Half "
+            "of the loss outside the element is placed upstream of it (model assumption).\n"
+            "- **Pump flow** = geometric flow at the slipped speed minus pressure-driven "
+            "internal leakage (Danfoss data).\n"
+            "- **Membrane**: catalogue water permeability; salt permeability of a 5-year "
+            "element (ESS minimum rejection aged at the CH9 Table 4 rate). Nothing is "
+            "fitted to the plant data.\n"
             "- Feed salinity and temperature come from your readings; feed salinity is a grab "
             "sample.\n"
             "- At seawater salinity the valve throttles 30–60 bar across one seat, so "
