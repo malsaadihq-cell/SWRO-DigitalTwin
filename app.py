@@ -19,14 +19,14 @@ import streamlit as st
 # Adding or changing a mode is a data edit here, not new UI code.
 # ---------------------------------------------------------------------
 CONTROLS = {
-    "frequency":      dict(label="VFD frequency", unit="Hz",  min=24.0, max=50.0,  default=48.0, step=0.5),
+    "frequency":      dict(label="VFD frequency", unit="Hz",  min=24.0, max=60.0,  default=60.0, step=0.5),
     "outlet_pressure": dict(label="Pump outlet pressure", unit="bar", min=30.0, max=70.0, default=55.0, step=0.5),
     "health_factor":  dict(label="Pump health (simulate wear)", unit="%", min=80.0, max=100.0, default=100.0, step=1.0),
     "fouling":        dict(label="Membrane condition (simulate fouling)", unit="%", min=70.0, max=100.0, default=100.0, step=1.0),
-    "valve_opening":  dict(label="Brine valve opening", unit="%", min=0.0, max=100.0, default=25.0, step=1.0),
+    "valve_resistance": dict(label="Brine valve resistance K", unit="bar per (m³/h)²", min=0.05, max=1.00, default=0.231, step=0.001, fmt="%.3f"),
     "feed_pressure":  dict(label="Feed pressure", unit="bar", min=30.0, max=70.0,  default=55.0, step=0.5),
     "valve_dp":       dict(label="Pressure drop across valve", unit="bar", min=1.0, max=80.0, default=54.0, step=1.0),
-    "brine_flow":     dict(label="Brine flow to pass", unit="m³/h", min=0.0, max=17.0, default=9.5, step=0.1),
+    "brine_flow":     dict(label="Brine flow to pass", unit="m³/h", min=0.0, max=20.0, default=13.5, step=0.1),
 }
 
 KPIS = {
@@ -48,21 +48,22 @@ CHARTS = {
     "rej_vs_p":        ("Salt rejection vs feed pressure", "Feed pressure (bar)", "Salt rejection (%)"),
     "flow_vs_freq":    ("Feed flow vs VFD frequency",     "Frequency (Hz)",      "Feed flow (m³/h)"),
     "power_vs_p":      ("Shaft power vs feed pressure",   "Feed pressure (bar)", "Shaft power (kW)"),
-    "brine_vs_open":   ("Brine flow vs valve opening",    "Valve opening (%)",   "Brine flow (m³/h)"),
+    "brine_vs_k":      ("Back-pressure vs valve resistance", "Valve resistance K", "Back-pressure (bar)"),
 }
 
 EXPERIMENTS_MODE = "Full system - with Experiments"
 
 MODES = {
     "Full system": dict(
-        controls=["frequency", "valve_opening"],
+        controls=["frequency", "valve_resistance"],
         kpis=["recovery", "flux", "rejection", "sec"],
         charts=["flux_vs_p", "sec_vs_rec", "rej_vs_p"],
-        note="Both knobs are live. The model solves the operating point and every KPI.",
+        note="Both knobs are live. "
+             "The model solves the operating point and every KPI.",
     ),
     EXPERIMENTS_MODE: dict(
         controls=[], kpis=[], charts=[],
-        note="Load the lab workbook, pick an experiment: its frequency, valve opening "
+        note="Load the lab workbook, pick an experiment: its frequency, valve resistance "
              "and feed conditions drive the full plant, and the simulated results are "
              "set beside the measured ones. No parameter is adjusted.",
     ),
@@ -83,11 +84,12 @@ MODES = {
              "below. Fouling < 100% lowers the membrane permeability.",
     ),
     "Valve only": dict(
-        controls=["valve_opening", "brine_flow"],
+        controls=["valve_resistance", "brine_flow"],
         kpis=["valve_flow"],
-        charts=["brine_vs_open"],
-        note="The valve is a resistance: set the opening and the brine flow it must pass; "
-             "the model gives the back-pressure it develops (which sets the recovery).",
+        charts=["brine_vs_k"],
+        note="The valve is a resistance K, measured from its effect (brine pressure ÷ "
+             "brine flow²) because the hand-wheel position is not recorded. The model "
+             "gives the back-pressure K·Q² (which sets the recovery).",
     ),
     "Architecture": dict(
         controls=[], kpis=[], charts=[],
@@ -119,13 +121,13 @@ def _slider(key: str) -> float:
     return st.sidebar.slider(
         f"{c['label']} ({c['unit']})",
         min_value=c["min"], max_value=c["max"],
-        value=c["default"], step=c["step"],
+        value=c["default"], step=c["step"], format=c.get("fmt"),
     )
 
 
 # controls that set the operating point vs. controls that inject a fault
 OPERATING_CONTROLS = ["frequency", "outlet_pressure", "feed_pressure",
-                      "valve_opening", "valve_dp", "brine_flow"]
+                      "valve_resistance", "valve_dp", "brine_flow"]
 WHATIF_CONTROLS = ["health_factor"]
 
 
