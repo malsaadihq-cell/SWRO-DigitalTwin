@@ -215,7 +215,7 @@ def load_workbook(source) -> Workbook:
         # salinity rows are formulas in the sheet; if their cached values are
         # missing, rebuild them from conductivity × k (same k as the sheet)
         for tds_key, ec_key, k_key, k_def, lab in (
-                ("brine_tds", "brine_ec", "k_brine", 0.75, "Brine salinity (from EC)"),
+                ("brine_tds", "brine_ec", "k_brine", 0.66, "Brine salinity (from EC)"),
                 ("permeate_tds", "perm_ec", "k_perm", 0.5, "Permeate salinity (from EC)")):
             if tds_key not in e.raw and ec_key in e.raw:
                 k = params.get(k_key, k_def)
