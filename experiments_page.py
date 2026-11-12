@@ -100,11 +100,10 @@ def _parse(data: bytes):
 @st.cache_data(show_spinner="Solving the coupled plant…")
 def _solve(freq: float, k: float, tds: float, temp: float):
     r = S.simulate(freq, k, tds, temp)
-    # same call system.simulate makes internally at the balanced pressure,
-    # kept here so the CH9 working of every membrane value can be shown
-    mr = membrane.simulate(r.operating_pressure, tds, temp, r.feed_flow)
+    # the membrane result at the solved point (element inlet pressure, plant
+    # salt passage) comes with the system result, so its CH9 working can be shown
     vr = valve.simulate(k, r.brine_flow)
-    return r, mr, vr
+    return r, r.membrane, vr
 
 
 # ---------------------------------------------------------------------------
@@ -170,8 +169,9 @@ def _inputs(e: X.Experiment) -> None:
         '<p class="sub">Not in the workbook; not adjusted.</p>'
         + kv("Pump health", "1.00", "")
         + kv("Membrane fouling factor", "1.00", "")
-        + kv("Gauge-to-gauge loss ΔP", f"{S.DP_GAUGES:.2f}", "bar")
-        + kv("Element pressure drop ΔPe", f"{S.ELEMENT_DP:g}", "bar")
+        + kv("Gauge-to-gauge loss ΔP (measured median)", f"{S.DP_GAUGES:.2f}", "bar")
+        + kv("Share of it upstream of the element", f"{S.UPSTREAM_SHARE*100:.0f}", "%")
+        + kv("Membrane salt passage (5-yr element)", f"× {membrane.PLANT_SALT_PASSAGE:.2f}", "")
         + '</div>'
     )
     st.markdown(f'<div class="fx-grid">{drive}{cond}{fixed}</div>', unsafe_allow_html=True)
@@ -236,32 +236,33 @@ def _equations(r, mr, vr) -> dict:
 
     return {
         "operating_pressure": (
-            "Solved, not set. The pump fixes the feed flow; the membrane splits it at "
+            "Solved, not set. The pump delivers its flow at this pressure; the membrane splits it at "
             f"pressure P; the valve must pass the brine. P is found by bisection where the "
             f"valve back-pressure K·Qb² equals the brine-gauge pressure P − ΔP_gauges "
             f"(ΔP_gauges = {dpg:.2f} bar, measured median).",
-            pick(sw, "pressure", "brine_p")),
+            pick(sw, "pressure", "brine_p", "p_mem")),
         "brine_pressure": (
             "Valve back-pressure at the solved brine flow. K came from this run's measured "
             "brine pressure, so this value tracks the lab figure by construction.",
             pick(vr.worked, "dp") + pick(sw, "brine_p")),
         "feed_flow": (
-            "Positive-displacement pump: flow follows shaft speed only (rpm = 30 · Hz), "
-            "independent of pressure.",
-            pick(sw, "qfeed")),
+            "Positive-displacement pump (Danfoss data): geometric flow at the slipped shaft "
+            "speed, less the internal leakage that grows with the outlet pressure.",
+            pick(sw, "rpm", "leak", "qfeed")),
         "permeate_flow": (
-            "CH9 Step 5 at the solved pressure: water permeability at T, net driving "
+            "CH9 Step 5 at the element inlet pressure: water permeability at T, net driving "
             "pressure, flux, then permeate flow.",
-            pick(s5, "kwT", "ndp", "flux", "qp")),
+            pick(sw, "p_mem") + pick(s5, "kwT", "ndp", "flux", "qp")),
         "brine_flow": (
             "Mass balance on the element.",
             pick(sw, "balance") + pick(s5, "qc")),
         "recovery": ("Permeate over feed.", pick(sw, "recovery")),
         "flux": ("CH9 Step 5 — solution-diffusion water flux.", pick(s5, "kwT", "ndp", "flux")),
         "permeate_tds": (
-            "CH9 Step 6, flux-effect form (the one the model uses): salt passage Ks(T) "
-            "diluted by the water flux J.",
-            pick(s6, "ksT", "cp_flux")),
+            "CH9 Step 6, flux-effect form: salt permeability Ks(T) of the 5-year element "
+            "(ESS minimum rejection, aged at the CH9 Table 4 rate) diluted by the flux J.",
+            [membrane.plant_salt_passage()["worked"][k] for k in ("ksmin", "ksplant", "factor")]
+            + pick(s6, "ksT", "cp_flux")),
         "brine_tds": ("CH9 Step 5 — concentration build-up at the solved recovery.",
                       pick(s5, "cc")),
         "rejection": ("CH9 Step 6.", pick(s6, "cp_flux", "rej")),
