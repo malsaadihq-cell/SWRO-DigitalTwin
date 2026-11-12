@@ -11,23 +11,8 @@ Pump identity is confirmed: the manual's Technical-data table (p. 24)
 lists code 180B3211 as APP 11 / 1500, and that same code is on the plant
 nameplate. So we use that variant's numbers.
 
-Delivered flow (revised)
-------------------------
-A positive-displacement pump delivers its geometric flow minus an internal
-leakage that grows with the outlet pressure:
-
-    Q = D · n − Q_leak,60 · p/60
-
-D (137 cm³/rev) and the rated point (11.4 m³/h at 1480 rpm and 60 bar, from
-the power table) fix Q_leak,60 = D·1480 − 11.4 = 0.77 m³/h. The shaft speed
-includes the motor slip seen at that rated point (1480 vs 1500 rpm). This
-replaced Q = 11.4·n/1500, which scaled the leakage with speed and ignored
-pressure; against the plant's Exp 1–9 (Qp + Qb) the new law is within ~1 %
-for 6 of 8 runs, with no fitted number.
-
 Manual = "2 HPP O&M Manual APP 11-13 Pumps" (Danfoss). Page numbers below
-are the PDF page numbers of that file. The same tables are in the data
-sheet 521B1215 (pp. 4–6).
+are the PDF page numbers of that file.
 """
 from __future__ import annotations
 
@@ -39,8 +24,9 @@ P24 = "Danfoss APP 11-13 manual, p. 24 — Technical data table (code 180B3211)"
 P25 = "Danfoss APP 11-13 manual, p. 25 — Flow at different rpm"
 P26 = "Danfoss APP 11-13 manual, p. 26 — Power requirements (APP 11/1500)"
 CH4 = ("Project Chapter 4 — instrument survey. 4-pole motor (120·f/4 = 30·f) "
-       "direct-coupled, 60 Hz nameplate. The research plant runs the pump "
-       "above its 1500 rpm rated speed on purpose")
+       "direct-coupled, 60 Hz nameplate. At 60 Hz the shaft turns 1800 rpm, "
+       "i.e. 20% above the pump's 1500 rpm rated speed (APP 11/1500): the "
+       "research plant runs it over-speed on purpose")
 
 
 # ---------------------------------------------------------------------
@@ -60,14 +46,7 @@ CHARACTERISTICS: dict[str, Spec] = {
         "Fluid volume the pump pushes per shaft revolution", P24),
     "rated_flow": Spec(
         11.4, "m³/h",
-        "Delivered flow at the rated point (1480 rpm, 60 bar)", P24 + "; " + P26),
-    "rated_point_rpm": Spec(
-        1480.0, "rpm",
-        "Shaft speed at which the rated flow and power are given — 1.3 % below "
-        "the 1500 rpm synchronous speed (motor slip)", P26),
-    "rated_point_pressure": Spec(
-        60.0, "bar",
-        "Outlet pressure of the rated point ('typical average flow at 60 bar')", P24),
+        "Delivered flow at max speed (1500 rpm) and 60 bar", P24),
     "rated_rpm": Spec(
         1500.0, "rpm",
         "Maximum continuous shaft speed", P24),
@@ -88,15 +67,16 @@ CHARACTERISTICS: dict[str, Spec] = {
         "Highest allowed suction pressure (continuous)", P24),
     "power_ref": Spec(
         24.0, "kW",
-        "Manufacturer shaft power at the rated point (60 bar) — a check point", P24),
+        "Manufacturer shaft power at 1500 rpm & 60 bar — a check point", P24),
     "calc_factor": Spec(
         475.0, "—",
         "Constant in the Danfoss power equation; bundles pump efficiency, "
         "specific to this pump variant", P26),
     "hz_to_rpm": Spec(
         30.0, "rpm/Hz",
-        "Synchronous speed per Hz of the 4-pole, direct-coupled motor "
-        "(rpm = 120·f/4 = 30·f), before slip", CH4),
+        "Converts VFD frequency to shaft speed. 4-pole motor, direct-coupled: "
+        "rpm = 120·f/poles = 120·f/4 = 30·f. At the 60 Hz nameplate the shaft "
+        "runs 1800 rpm — above the 1500 rpm rated speed, so the model flags it", CH4),
 }
 
 
@@ -108,59 +88,35 @@ def v(key: str) -> float:
     return CHARACTERISTICS[key].value
 
 
-def slip_ratio() -> float:
-    """Actual / synchronous speed at the Danfoss rated point: 1480/1500 (p. 26).
-    To be replaced by the plant motor's nameplate speed once it is read."""
-    return v("rated_point_rpm") / (v("hz_to_rpm") * 50.0)
-
-
 # ---------------------------------------------------------------------
 # The laws. Each returns the number; simulate() also builds the worked
-# string so the UI can show the substitution, not just the answer.
+# string so the UI can show "11.4 × 1800/1500 = 13.68", not just the answer.
 # ---------------------------------------------------------------------
 def rpm_from_frequency(hz: float) -> float:
-    """Shaft speed from VFD frequency: synchronous 30·f (4-pole, Chapter 4)
-    times the slip ratio of the Danfoss rated point (1480/1500, p. 26):
-
-        n = 30 · f · 1480/1500 = 29.6 · f
-    """
-    return hz * v("hz_to_rpm") * slip_ratio()
+    """Speed from VFD frequency. 4-pole motor (Chapter 4): rpm = 120·f/4 = hz × 30,
+    so the 60 Hz nameplate gives 1800 rpm — 20% over the 1500 rpm rated speed."""
+    return hz * v("hz_to_rpm")
 
 
 def theoretical_flow(rpm: float) -> float:
-    """Geometric (slip-free) flow of a fixed-displacement pump (p. 24):
+    """Geometric (slip-free) flow of a fixed-displacement pump:
 
         Q_theo [m³/h] = displacement [cm³/rev] × rpm × 60 / 1e6
+
+    Used only to express volumetric efficiency; not the delivered flow.
     """
     return v("displacement") * rpm * 60.0 / 1e6
 
 
-def leakage_at_rated() -> float:
-    """Internal leakage at the rated point, from the manual's own numbers:
+def nominal_flow(rpm: float) -> float:
+    """Delivered flow, manufacturer flow-vs-rpm law (manual p. 25):
 
-        Q_leak,60 = Q_theo(1480 rpm) − 11.4 = 12.17 − 11.4 = 0.77 m³/h
+        "The flow/rpm ratio is constant"  ->  Q = Q_rated × rpm / rpm_rated
+
+    This is the straight reference line on the p. 25 chart; it already
+    includes the pump's nominal slip at rated conditions.
     """
-    return theoretical_flow(v("rated_point_rpm")) - v("rated_flow")
-
-
-def leakage(outlet_bar: float) -> float:
-    """Internal leakage through the piston/port clearances. Laminar leakage is
-    proportional to the pressure difference it is driven by (model assumption):
-
-        Q_leak(p) = Q_leak,60 · p / 60
-    """
-    return leakage_at_rated() * max(outlet_bar, 0.0) / v("rated_point_pressure")
-
-
-def nominal_flow(rpm: float, outlet_bar: float = 60.0) -> float:
-    """Delivered flow of a healthy pump:
-
-        Q = Q_theo(n) − Q_leak(p)
-
-    At the rated point (1480 rpm, 60 bar) this returns exactly 11.4 m³/h.
-    The default outlet_bar = 60 gives the manual's p. 25 reference line.
-    """
-    return theoretical_flow(rpm) - leakage(outlet_bar)
+    return v("rated_flow") * rpm / v("rated_rpm")
 
 
 def shaft_power(flow_m3h: float, outlet_bar: float) -> float:
@@ -198,36 +154,23 @@ class PumpResult:
     worked: dict = field(default_factory=dict)   # LaTeX bodies, no $$
 
 
-def flow_worked(frequency_hz: float, outlet_pressure: float, health: float = 1.0) -> dict:
-    """LaTeX of the speed and delivered-flow laws with values substituted."""
-    rpm = rpm_from_frequency(frequency_hz)
-    q_theo = theoretical_flow(rpm)
-    q_leak = leakage(outlet_pressure)
-    flow = (q_theo - q_leak) * health
-    return {
-        "rpm": (rf"n = 30\,f\,\frac{{1480}}{{1500}} = 30\times {frequency_hz:.1f}\times 0.987"
-                rf" = {rpm:.0f}\ \mathrm{{rpm}}"),
-        "leak": (rf"Q_{{leak}} = Q_{{leak,60}}\,\frac{{p}}{{60}} = {leakage_at_rated():.2f}"
-                 rf"\times\frac{{{outlet_pressure:.1f}}}{{60}} = {q_leak:.2f}\ \mathrm{{m^3/h}}"),
-        "flow": (rf"Q = \left(D\,n - Q_{{leak}}\right) h = \left({v('displacement'):.0f}"
-                 rf"\times 10^{{-6}}\times {rpm:.0f}\times 60 - {q_leak:.2f}\right)\times {health:.2f}"
-                 rf" = ({q_theo:.2f} - {q_leak:.2f})\times {health:.2f} = {flow:.2f}\ \mathrm{{m^3/h}}"),
-    }
-
-
 def simulate(frequency_hz: float, outlet_pressure: float,
              health_factor: float = 1.0, inlet_pressure: float = 3.0) -> PumpResult:
     """Solve the pump block for one setting."""
     rpm = rpm_from_frequency(frequency_hz)
     q_theo = theoretical_flow(rpm)
-    q_nom = nominal_flow(rpm, outlet_pressure)
+    q_nom = nominal_flow(rpm)
     flow = q_nom * health_factor
     power = shaft_power(flow, outlet_pressure)
     eta_v = (flow / q_theo) if q_theo else 0.0
     sec = (power / flow) if flow else math.inf
 
-    worked = flow_worked(frequency_hz, outlet_pressure, health_factor)
-    worked.update({
+    worked = {
+        "rpm": (rf"n = f \times {v('hz_to_rpm'):g} = {frequency_hz:.1f} \times {v('hz_to_rpm'):g}"
+                rf" = {rpm:.0f}\ \mathrm{{rpm}}"),
+        "flow": (rf"Q = Q_{{rated}}\,\frac{{n}}{{n_{{rated}}}}"
+                 rf"\times h = {v('rated_flow')}\times\frac{{{rpm:.0f}}}{{1500}}"
+                 rf"\times {health_factor:.2f} = {flow:.2f}\ \mathrm{{m^3/h}}"),
         "power": (rf"P = \frac{{16.7\,Q\,p_{{out}}}}{{k}}"
                   rf" = \frac{{16.7 \times {flow:.2f} \times {outlet_pressure:.1f}}}{{475}}"
                   rf" = {power:.2f}\ \mathrm{{kW}}"),
@@ -235,7 +178,7 @@ def simulate(frequency_hz: float, outlet_pressure: float,
                 rf" = {eta_v*100:.1f}\%"),
         "sec": (rf"e = \frac{{P}}{{Q}} = \frac{{{power:.2f}}}{{{flow:.2f}}}"
                 rf" = {sec:.2f}\ \mathrm{{kWh/m^3}}"),
-    })
+    }
 
     result = PumpResult(
         frequency_hz=frequency_hz, rpm=rpm, outlet_pressure=outlet_pressure,
@@ -301,7 +244,7 @@ def interpret(r: PumpResult, measured: dict | None = None) -> list[tuple[str, st
     qm = measured.get("flow")
     if f and qm:
         rpm_m = rpm_from_frequency(f)
-        ref = nominal_flow(rpm_m, measured.get("outlet_pressure") or v("rated_point_pressure"))
+        ref = nominal_flow(rpm_m)
         gap = (qm - ref) / ref * 100.0 if ref else 0.0
         if abs(gap) <= FLOW_TOL:
             msgs.append(("ok",
@@ -346,11 +289,11 @@ def interpret(r: PumpResult, measured: dict | None = None) -> list[tuple[str, st
 # ---------------------------------------------------------------------
 # Reference curves for plotting (manufacturer lines to compare against)
 # ---------------------------------------------------------------------
-def flow_reference(points: int = 33, outlet_bar: float = 60.0) -> list[tuple[float, float]]:
-    """Delivered-flow line (p. 25) at a given outlet pressure: (rpm, flow)."""
+def flow_reference(points: int = 33) -> list[tuple[float, float]]:
+    """Manufacturer flow line (p. 25): (rpm, nominal flow) over the range."""
     lo, hi = v("min_rpm"), v("rated_rpm")
     return [(lo + (hi - lo) * i / (points - 1),
-             nominal_flow(lo + (hi - lo) * i / (points - 1), outlet_bar))
+             nominal_flow(lo + (hi - lo) * i / (points - 1)))
             for i in range(points)]
 
 
