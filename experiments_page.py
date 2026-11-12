@@ -27,6 +27,10 @@ from core import system as S
 
 ACCENT = "#285A7A"   # app steel blue
 
+# The "Held at model defaults" card (pump health, fouling, ΔP, upstream share,
+# salt passage). Kept in the code; set to True to show it again on the page.
+SHOW_MODEL_DEFAULTS = False
+
 # key, label, unit, decimals
 ROWS = [
     ("operating_pressure", "Feed (operating) pressure", "bar", 2),
@@ -174,7 +178,8 @@ def _inputs(e: X.Experiment) -> None:
         + kv("Membrane salt passage (5-yr element)", f"× {membrane.PLANT_SALT_PASSAGE:.2f}", "")
         + '</div>'
     )
-    st.markdown(f'<div class="fx-grid">{drive}{cond}{fixed}</div>', unsafe_allow_html=True)
+    cards = drive + cond + (fixed if SHOW_MODEL_DEFAULTS else "")
+    st.markdown(f'<div class="fx-grid">{cards}</div>', unsafe_allow_html=True)
     st.caption("Pressure, flows, salinities and energy are solved by the model from these "
                "inputs. Because K is formed from the measured brine pressure, the simulated "
                "brine pressure follows it closely by construction — that row is not a test.")
