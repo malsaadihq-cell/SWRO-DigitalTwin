@@ -5,7 +5,9 @@ per experiment "Exp 1", "Exp 2", ...) and splits each experiment into the
 three kinds of data the page needs:
 
     1. inputs      — the two knobs the twin is driven with:
-                     VFD frequency (Hz) and brine-valve opening (% travel)
+                     VFD frequency (Hz) and brine-valve resistance K, computed here
+                     from the run's own brine pressure and brine flow (K = P_b / Q_b²)
+                     because the hand-wheel position is never recorded
     2. conditions  — feed salinity (TDS, mg/L) and feed temperature (°C)
     3. lab results — what the plant measured (plus quantities derived
                      directly from those measurements: Qf = Qp + Qb, R, J, rejection)
@@ -31,8 +33,9 @@ MEMBRANE_AREA_DEFAULT = 40.9      # m², SWC4 MAX — overridden by core.membran
 # lower-cased label, first match wins, so the order matters for overlapping names.
 ROW_PATTERNS: list[tuple[str, str]] = [
     ("frequency",      r"^frequency"),
-    ("valve_opening",  r"valve\s*opening"),
     ("feed_tds",       r"^feed\s*salinity"),
+    ("brine_ec",       r"^brine.*conductivity"),
+    ("perm_ec",        r"^permeate\s*conductivity"),
     ("feed_ec",        r"feed\s*conductivity"),
     ("feed_temp",      r"^feed\s*temperature"),
     ("feed_pressure",  r"feed\s*pressure"),
@@ -75,14 +78,14 @@ class Experiment:
         return self.raw.get("frequency")
 
     @property
-    def valve_opening_pct(self):
-        """Valve opening in % travel. The workbook stores it as a fraction
-        (0.368 = 36.8 %) under the unit '% travel'; anything ≤ 1 is read as a
-        fraction and ×100, so a sheet that already stores 36.8 also works."""
-        x = self.raw.get("valve_opening")
-        if x is None:
+    def valve_resistance(self):
+        """Measured valve resistance K = P_brine / Q_brine²  [bar per (m³/h)²].
+        Computed from the raw readings, not read from the sheet, so it does not
+        depend on the workbook's formulas having been recalculated."""
+        p, q = self.raw.get("brine_pressure"), self.raw.get("brine_flow")
+        if p is None or not q:
             return None
-        return x * 100.0 if x <= 1.0 else x
+        return p / q ** 2
 
     # ---- 2. conditions --------------------------------------------------------
     @property
@@ -184,7 +187,8 @@ def load_workbook(source) -> Workbook:
             if val is not None:
                 params[pkey] = val
 
-    missing = [k for k in ("frequency", "valve_opening", "feed_temp") if k not in found]
+    missing = [k for k in ("frequency", "brine_pressure", "brine_flow", "feed_temp")
+               if k not in found]
     if "feed_tds" not in found and "feed_ec" not in found:
         missing.append("feed_tds")
     if missing:
@@ -208,16 +212,27 @@ def load_workbook(source) -> Workbook:
             e.raw["feed_tds"] = e.raw["feed_ec"] * k
             e.units["feed_tds"], e.labels["feed_tds"] = "mg/L", "Feed salinity (from EC)"
             e.notes.append(f"Feed TDS = EC × k = {e.raw['feed_ec']:g} × {k:g}")
-        if e.raw.get("valve_opening") is not None and e.raw["valve_opening"] <= 1.0:
-            e.notes.append(f"Valve opening stored as a fraction {e.raw['valve_opening']:.4f}"
-                           f" → {e.raw['valve_opening'] * 100:.2f} %")
+        # salinity rows are formulas in the sheet; if their cached values are
+        # missing, rebuild them from conductivity × k (same k as the sheet)
+        for tds_key, ec_key, k_key, k_def, lab in (
+                ("brine_tds", "brine_ec", "k_brine", 0.75, "Brine salinity (from EC)"),
+                ("permeate_tds", "perm_ec", "k_perm", 0.5, "Permeate salinity (from EC)")):
+            if tds_key not in e.raw and ec_key in e.raw:
+                k = params.get(k_key, k_def)
+                e.raw[tds_key] = e.raw[ec_key] * k
+                e.units[tds_key], e.labels[tds_key] = "mg/L", lab
+                e.notes.append(f"{lab} = EC × k = {e.raw[ec_key]:g} × {k:g}")
+        if e.valve_resistance is not None:
+            e.notes.append(f"Valve resistance K = P_b / Q_b² = {e.raw['brine_pressure']:.2f}"
+                           f" / {e.raw['brine_flow']:.2f}² = {e.valve_resistance:.3f}"
+                           " bar per (m³/h)²")
         # an empty future column ("Exp 10" with nothing under it) is not an experiment
-        if e.frequency is not None and e.valve_opening_pct is not None:
+        if e.frequency is not None and e.valve_resistance is not None:
             exps.append(e)
 
     if not exps:
-        raise WorkbookError("Experiment columns were found but none holds both a "
-                            "frequency and a valve opening.")
+        raise WorkbookError("Experiment columns were found but none holds a frequency, "
+                            "a brine pressure and a brine flow.")
     exps.sort(key=lambda e: e.number)
     return Workbook(sheet=ws.title, experiments=exps, params=params)
 
@@ -238,7 +253,7 @@ def lab_results(e: Experiment, area: float = MEMBRANE_AREA_DEFAULT) -> dict[str,
     g = e.raw.get
     out: dict[str, LabValue] = {}
     out["operating_pressure"] = LabValue(g("feed_pressure"), "measured")
-    out["brine_pressure"] = LabValue(g("brine_pressure"), "measured")
+    out["brine_pressure"] = LabValue(g("brine_pressure"), "sets K")
     qp, qb = g("permeate_flow"), g("brine_flow")
     out["permeate_flow"] = LabValue(qp, "measured")
     out["brine_flow"] = LabValue(qb, "measured")
