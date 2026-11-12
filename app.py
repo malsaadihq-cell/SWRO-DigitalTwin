@@ -155,7 +155,9 @@ def sidebar() -> tuple[str, dict, dict]:
         for key in op_keys:
             controls[key] = _slider(key)
             if key == "frequency":
-                st.sidebar.caption(f"≈ {controls[key] * 30:.0f} rpm")
+                from core import pump as _pump
+                st.sidebar.caption(f"≈ {_pump.rpm_from_frequency(controls[key]):.0f} rpm "
+                                   f"(rated max {_pump.v('rated_rpm'):.0f})")
 
     if wi_keys:
         st.sidebar.divider()
