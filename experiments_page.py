@@ -9,9 +9,11 @@ Replaces the old Validation page. One flow, top to bottom:
        numbers only, no pass/fail verdict
     5. The equations behind every simulated value, each linked both ways to its row
 
-The full coupled plant (core.system.simulate) is driven ONLY by the two knobs
-and the feed conditions taken from the workbook. No lab result is fed into the
-model; no parameter is adjusted.
+The full coupled plant (core.system.simulate) is driven by the two knobs and
+the feed conditions taken from the workbook. The valve knob is the run's
+measured resistance K = P_brine / Q_brine² (the hand-wheel position is never
+recorded), so the brine pressure is an input in disguise and its comparison
+row is labelled as such. No parameter is adjusted.
 """
 from __future__ import annotations
 
@@ -42,7 +44,8 @@ ROWS = [
     ("beta",               "Polarisation factor β",     "–", 3),
 ]
 BASIS_TEXT = {"measured": "measured", "derived": "from measurements",
-              "workbook calc": "calculated in workbook"}
+              "workbook calc": "calculated in workbook",
+              "sets K": "measured · used to set K"}
 
 CSS = f"""
 <style>
@@ -95,12 +98,12 @@ def _parse(data: bytes):
 
 
 @st.cache_data(show_spinner="Solving the coupled plant…")
-def _solve(freq: float, opening: float, tds: float, temp: float):
-    r = S.simulate(freq, opening, tds, temp)
+def _solve(freq: float, k: float, tds: float, temp: float):
+    r = S.simulate(freq, k, tds, temp)
     # same call system.simulate makes internally at the balanced pressure,
     # kept here so the CH9 working of every membrane value can be shown
     mr = membrane.simulate(r.operating_pressure, tds, temp, r.feed_flow)
-    vr = valve.simulate(opening, r.brine_flow)
+    vr = valve.simulate(k, r.brine_flow)
     return r, mr, vr
 
 
@@ -123,7 +126,7 @@ def _fmt(x, d: int) -> str:
 def _sim_values(r, mr) -> dict:
     return {
         "operating_pressure": r.operating_pressure,
-        "brine_pressure": r.operating_pressure - S.ELEMENT_DP,
+        "brine_pressure": r.valve_back_pressure,
         "feed_flow": r.feed_flow,
         "permeate_flow": r.permeate_flow,
         "brine_flow": r.brine_flow,
@@ -149,7 +152,10 @@ def _inputs(e: X.Experiment) -> None:
         '<div class="fx-box drive"><h4>Simulation inputs — the two knobs</h4>'
         f'<p class="sub">Taken from {e.label}; these set the operating point.</p>'
         + kv("VFD frequency", _fmt(e.frequency, 1), "Hz")
-        + kv("Brine-valve opening", _fmt(e.valve_opening_pct, 2), "% travel")
+        + kv("Valve resistance K", _fmt(e.valve_resistance, 3), "bar/(m³/h)²")
+        + f'<p class="sub" style="margin:.4rem 0 0">K = brine pressure ÷ brine flow² = '
+          f'{_fmt(e.raw.get("brine_pressure"), 2)} ÷ {_fmt(e.raw.get("brine_flow"), 2)}² — '
+          'the hand-wheel position is not recorded, so the valve enters by its effect.</p>'
         + '</div>'
     )
     cond = (
@@ -164,12 +170,14 @@ def _inputs(e: X.Experiment) -> None:
         '<p class="sub">Not in the workbook; not adjusted.</p>'
         + kv("Pump health", "1.00", "")
         + kv("Membrane fouling factor", "1.00", "")
+        + kv("Gauge-to-gauge loss ΔP", f"{S.DP_GAUGES:.2f}", "bar")
         + kv("Element pressure drop ΔPe", f"{S.ELEMENT_DP:g}", "bar")
         + '</div>'
     )
     st.markdown(f'<div class="fx-grid">{drive}{cond}{fixed}</div>', unsafe_allow_html=True)
-    st.caption("Everything else on this page — pressure, flows, salinities, energy — "
-               "is solved by the model from these inputs alone. No lab result is fed in.")
+    st.caption("Pressure, flows, salinities and energy are solved by the model from these "
+               "inputs. Because K is formed from the measured brine pressure, the simulated "
+               "brine pressure follows it closely by construction — that row is not a test.")
     if e.notes:
         with st.expander("Conversions applied when reading the workbook"):
             for n in e.notes:
@@ -207,8 +215,8 @@ def _comparison(sim: dict, lab: dict) -> None:
                 unsafe_allow_html=True)
     st.caption("% of lab = 100 · (simulation − lab) / |lab|. A positive value means the "
                "simulation is above the lab figure. Under each lab value: whether it was "
-               "measured directly, formed from this experiment's measurements, or "
-               "calculated inside the workbook.")
+               "measured directly, formed from this experiment's measurements, calculated "
+               "inside the workbook, or used to set the valve resistance K (so not a test).")
 
 
 # ---------------------------------------------------------------------------
@@ -216,12 +224,12 @@ def _comparison(sim: dict, lab: dict) -> None:
 # ---------------------------------------------------------------------------
 def _equations(r, mr, vr) -> dict:
     sw, s5, s6 = r.worked, mr.step_worked.get("step5", {}), mr.step_worked.get("step6", {})
-    P, dpe = r.operating_pressure, S.ELEMENT_DP
+    P = r.operating_pressure
     cf = pump.v("calc_factor")
     power_tex = (rf"P_{{shaft}} = \frac{{16.7\,Q_f\,P}}{{{cf:g}}} = "
                  rf"\frac{{16.7\times {r.feed_flow:.2f}\times {P:.2f}}}{{{cf:g}}}"
                  rf" = {r.power:.2f}\ \mathrm{{kW}}")
-    pb_tex = (rf"P_b = P - \Delta P_e = {P:.2f} - {dpe:g} = {P - dpe:.2f}\ \mathrm{{bar}}")
+    dpg = S.DP_GAUGES
 
     def pick(d, *keys):
         return [d[k] for k in keys if k in d]
@@ -229,13 +237,14 @@ def _equations(r, mr, vr) -> dict:
     return {
         "operating_pressure": (
             "Solved, not set. The pump fixes the feed flow; the membrane splits it at "
-            "pressure P; the valve must pass the brine. P is found by bisection where the "
-            "valve back-pressure equals the brine-side pressure P − ΔPe.",
-            pick(sw, "pressure") + pick(vr.worked, "cv", "dp")),
+            f"pressure P; the valve must pass the brine. P is found by bisection where the "
+            f"valve back-pressure K·Qb² equals the brine-gauge pressure P − ΔP_gauges "
+            f"(ΔP_gauges = {dpg:.2f} bar, measured median).",
+            pick(sw, "pressure", "brine_p")),
         "brine_pressure": (
-            "Brine-side pressure = operating pressure less the element drop; at the solved "
-            "point it equals the valve back-pressure.",
-            [pb_tex] + pick(vr.worked, "dp")),
+            "Valve back-pressure at the solved brine flow. K came from this run's measured "
+            "brine pressure, so this value tracks the lab figure by construction.",
+            pick(vr.worked, "dp") + pick(sw, "brine_p")),
         "feed_flow": (
             "Positive-displacement pump: flow follows shaft speed only (rpm = 30 · Hz), "
             "independent of pressure.",
@@ -340,12 +349,12 @@ def render(controls: dict | None = None, feed: dict | None = None) -> None:
     # 3 — inputs
     _step(3, f"Simulation inputs for {e.label}")
     _inputs(e)
-    if not all(_ok(x) for x in (e.frequency, e.valve_opening_pct, e.feed_tds, e.feed_temperature)):
-        st.error(f"{e.label} is missing an input (frequency, valve opening, feed TDS or "
-                 "temperature), so it cannot be simulated.")
+    if not all(_ok(x) for x in (e.frequency, e.valve_resistance, e.feed_tds, e.feed_temperature)):
+        st.error(f"{e.label} is missing an input (frequency, brine pressure / flow, feed TDS "
+                 "or temperature), so it cannot be simulated.")
         return
 
-    r, mr, vr = _solve(e.frequency, e.valve_opening_pct, e.feed_tds, e.feed_temperature)
+    r, mr, vr = _solve(e.frequency, e.valve_resistance, e.feed_tds, e.feed_temperature)
     if not r.converged:
         st.info("The solver found no pressure balance inside 0.1–82.7 bar for these "
                 "inputs; the values below are at the nearest bound.")
