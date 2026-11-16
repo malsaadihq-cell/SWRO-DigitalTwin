@@ -59,12 +59,16 @@ PARAMS: dict[str, Spec] = {
     "SR": Spec(0.998, "—",
                "Nominal salt rejection used for the brine-concentration build-up", ESS),
     "SR_min": Spec(0.997, "—",
-                   "Minimum guaranteed salt rejection of a new element", ESS),
+                   "Minimum guaranteed salt rejection of a new element (also the value "
+                   "CH9 uses for constant-rejection permeate quality)",
+                   ESS + "; " + CH9 + ", Fig. 3 p. 247 and §9.3.6.1 p. 259"),
     "age": Spec(5.0, "years",
-                "Service age of the installed element", PLANT),
-    "sp_increase": Spec(0.10, "per year",
-                        "Salt-passage increase per year of service (Hydranautics, upper "
-                        "guideline value)", CH9 + ", Table 4, p. 248"),
+                "Service age of the installed element — to be confirmed", PLANT),
+    "sp_increase": Spec(0.07, "per year",
+                        "Salt-passage increase per year of service, Hydranautics, sea water, "
+                        "surface intake. The 10 %/yr column is for well intake with MF/UF "
+                        "pretreatment; this plant has conventional pretreatment (sand filter "
+                        "+ cartridge filter)", CH9 + ", Table 4, p. 248"),
     "osmotic_coeff": Spec(0.8, "bar per 1000 mg/L",
                           "Osmotic-pressure rule of thumb", CH9 + ", p. 251"),
     "dPe": Spec(0.2, "bar",
@@ -193,7 +197,8 @@ def plant_salt_passage() -> dict:
     """Salt-passage factor of the INSTALLED element relative to the catalogue Ks:
 
         Ks,new,min = Ks(SR_min = 99.7 %)              (ESS minimum, CH9 Step 3)
-        Ks,plant   = Ks,new,min · (1 + 0.10)^age      (CH9 Table 4, Hydranautics)
+        Ks,plant   = Ks,new,min · (1 + 0.07)^age      (CH9 Table 4 p. 248, Hydranautics,
+                                                        surface intake)
         factor     = Ks,plant / Ks25
 
     No plant measurement is used — the factor comes from the ESS, CH9 and the
