@@ -21,14 +21,16 @@ So we solve for the single P where
 ΔP_gauges is the MEASURED difference between the feed gauge (at the pump
 discharge, "HP discharge PG") and the brine gauge (at the brine strainer). The
 element itself accounts for at most 1 bar of it (ESS: 15 psi max per element);
-the rest is piping, fittings and the strainer. Half of the outside-element loss
-is placed upstream of the element, so the element inlet sees
+the rest is piping, fittings and the strainer.
 
-    P_in = P − (ΔP_gauges − ΔPe)/2
+The membrane's net driving pressure is the CH9 expression (p. 250, item 2)
 
-and its mean pressure is the mean of the two gauges. This placement is a model
-assumption, chosen because it matched the measured permeate flow best of the
-four placements tested on Exp 1–9 (membrane run at the measured pressures).
+    NDP = P_feed − ΔP/2 − Δπ_avg − P_perm
+
+with the MEASURED ΔP_gauges in place of the 0.2 bar that CH9 assumes per
+element (p. 251, "Assumed head loss per element"). The membrane block keeps its
+own ΔPe = 0.2 inside NDP, so it is handed P_in = P − (ΔP_gauges − ΔPe)/2, which
+makes P_in − ΔPe/2 = P − ΔP_gauges/2 exactly. No other number is involved.
 
 The pump flow depends on the outlet pressure (internal leakage), so the feed
 flow is solved together with P. The installed element is 5 years old: the
@@ -58,14 +60,9 @@ PARAMS: dict[str, Spec] = {
                       "brine gauge (brine strainer) — median of Exp 1–9 (range 3.65 – 8.62; "
                       "Exp 1 is an outlier)",
                       "Measured: RO Operating Readings, Exp 1–9, row 'Feed − Brine Gauge ΔP'"),
-    "upstream_share": Spec(0.5, "—",
-                           "Share of the outside-element loss placed upstream of the element "
-                           "(element at the mid-point between the gauges)",
-                           "Model assumption; best of four placements tested against Exp 1–9"),
 }
 
 DP_GAUGES = PARAMS["dP_gauges"].value
-UPSTREAM_SHARE = PARAMS["upstream_share"].value
 ELEMENT_DP = membrane.p("dPe")   # element's own loss, used inside the membrane NDP
 P_MIN, P_MAX = 0.1, 82.7         # search bounds (bar); 82.7 = membrane max
 
@@ -76,9 +73,12 @@ def feed_flow(frequency_hz: float, pressure: float, health: float = 1.0) -> floa
 
 
 def membrane_inlet_pressure(P: float) -> float:
-    """Element inlet pressure from the feed-gauge pressure P:
-    P_in = P − share·(ΔP_gauges − ΔPe)."""
-    return P - UPSTREAM_SHARE * (DP_GAUGES - ELEMENT_DP)
+    """Pressure handed to the membrane block so that its NDP is the CH9 form
+    (p. 250) with the measured ΔP_gauges instead of the assumed 0.2 bar (p. 251):
+
+        P_in − ΔPe/2 = P − ΔP_gauges/2   →   P_in = P − (ΔP_gauges − ΔPe)/2
+    """
+    return P - (DP_GAUGES - ELEMENT_DP) / 2.0
 
 
 def _state(P, resistance, feed_tds, temperature, frequency_hz, health, fouling, salt_passage):
@@ -165,9 +165,11 @@ def simulate(frequency_hz: float, valve_resistance: float, feed_tds: float,
         "rpm": pw["rpm"],
         "leak": pw["leak"],
         "qfeed": pw["flow"].replace("Q =", r"Q_{feed} =", 1),
-        "p_mem": (rf"P_{{in}} = P - \tfrac{{1}}{{2}}(\Delta P_{{gauges}} - \Delta P_e)"
-                  rf" = {P:.2f} - \tfrac{{1}}{{2}}({DP_GAUGES:.2f} - {ELEMENT_DP:g})"
-                  rf" = {p_in:.2f}\ \mathrm{{bar}}"),
+        "p_mem": (rf"NDP = P_{{feed}} - \tfrac{{\Delta P_{{gauges}}}}{{2}} - \Delta\pi - P_p"
+                  rf"\quad(\text{{CH9 p.250, measured }}\Delta P = {DP_GAUGES:.2f}\ \mathrm{{bar}}"
+                  rf"\text{{ instead of the assumed 0.2}})\ \Rightarrow\ "
+                  rf"P_{{feed}} - \tfrac{{\Delta P_{{gauges}}}}{{2}} = {P:.2f} - {DP_GAUGES/2:.2f}"
+                  rf" = {P - DP_GAUGES/2:.2f}\ \mathrm{{bar}}"),
         "balance": (rf"Q_{{feed}} = Q_p + Q_b:\quad {q_feed:.2f} = {qp:.2f} + {qb:.2f}"),
         "pressure": (rf"\text{{solve }}P:\ K\,Q_b^2 = P-\Delta P_{{gauges}}"
                      rf"\ \Rightarrow\ {K:.3f}\times {qb:.2f}^2 = {P:.2f} - {DP_GAUGES:.2f}"
