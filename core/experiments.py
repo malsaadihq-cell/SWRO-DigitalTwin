@@ -206,6 +206,12 @@ def load_workbook(source) -> Workbook:
                 e.notes.append(f"{lab}: {v:g} PSI → {v * PSI_TO_BAR:.2f} bar")
                 v *= PSI_TO_BAR
                 unit = "bar"
+            # seawater feed / brine conductivity is tens of thousands of µS/cm; a value
+            # below 1000 can only be mS/cm (e.g. 56.5) whatever the unit cell says
+            if key in ("feed_ec", "brine_ec") and v < 1000:
+                e.notes.append(f"{lab}: {v:g} read as mS/cm → {v * 1000:g} µS/cm")
+                v *= 1000.0
+                unit = "µS/cm"
             e.raw[key], e.units[key], e.labels[key] = v, unit, lab
         if "feed_tds" not in e.raw and "feed_ec" in e.raw:
             k = params.get("k_feed", 0.66)
@@ -281,7 +287,7 @@ def lab_results(e: Experiment, area: float = MEMBRANE_AREA_DEFAULT) -> dict[str,
                                     rf"\text{{rej}} = 1 - C_p/C_f = 1 - {cp:.1f}/{cf:.0f} = {rej:.2f}\%")
     else:
         out["rejection"] = LabValue(None, "derived")
-    out["power"] = LabValue(g("power"), "workbook calc")
+    out["power"] = LabValue(g("power"), "workbook")
     out["sec"] = LabValue(g("sec"), "workbook calc")
     out["beta"] = LabValue(g("beta"), "workbook calc")
     return out
