@@ -27,9 +27,9 @@ from core import system as S
 
 ACCENT = "#285A7A"   # app steel blue
 
-# The "Held at model defaults" card (pump health, fouling, ΔP, upstream share,
-# salt passage). Kept in the code; set to True to show it again on the page.
-SHOW_MODEL_DEFAULTS = False
+# The "Fixed model values" card: the values that are the same for every run,
+# each with its source. Set to False to hide it.
+SHOW_MODEL_DEFAULTS = True
 
 # key, label, unit, decimals
 ROWS = [
@@ -49,6 +49,7 @@ ROWS = [
 ]
 BASIS_TEXT = {"measured": "measured", "derived": "from measurements",
               "workbook calc": "calculated in workbook",
+              "workbook": "from workbook",
               "sets K": "measured · used to set K"}
 
 CSS = f"""
@@ -168,14 +169,20 @@ def _inputs(e: X.Experiment) -> None:
         + kv("Feed temperature", _fmt(e.feed_temperature, 1), "°C")
         + '</div>'
     )
+    mp = membrane.PARAMS
     fixed = (
-        '<div class="fx-box"><h4>Held at model defaults</h4>'
-        '<p class="sub">Not in the workbook; not adjusted.</p>'
-        + kv("Pump health", "1.00", "")
-        + kv("Membrane fouling factor", "1.00", "")
-        + kv("Gauge-to-gauge loss ΔP (measured median)", f"{S.DP_GAUGES:.2f}", "bar")
-        + kv("Share of it upstream of the element", f"{S.UPSTREAM_SHARE*100:.0f}", "%")
-        + kv("Membrane salt passage (5-yr element)", f"× {membrane.PLANT_SALT_PASSAGE:.2f}", "")
+        '<div class="fx-box"><h4>Fixed model values</h4>'
+        '<p class="sub">Same for every run; not adjusted to the results.</p>'
+        + kv("Feed − brine gauge ΔP", f"{S.DP_GAUGES:.2f}", "bar")
+        + '<p class="sub" style="margin:0 0 .3rem">Measured: median of the first campaign '
+          '(Exp 1–9)</p>'
+        + kv("Min. salt rejection, new element", f"{mp['SR_min'].value*100:.1f}", "%")
+        + '<p class="sub" style="margin:0 0 .3rem">SWC4 MAX spec sheet; CH9 p. 247, 259</p>'
+        + kv("Salt-passage increase", f"{mp['sp_increase'].value*100:.0f}", "% / year")
+        + '<p class="sub" style="margin:0 0 .3rem">CH9 Table 4 p. 248 — Hydranautics, '
+          'surface intake</p>'
+        + kv("Membrane age", f"{mp['age'].value:.0f}", "years")
+        + '<p class="sub" style="margin:0 0 .3rem">Plant information — to be confirmed</p>'
         + '</div>'
     )
     cards = drive + cond + (fixed if SHOW_MODEL_DEFAULTS else "")
@@ -265,7 +272,8 @@ def _equations(r, mr, vr) -> dict:
         "flux": ("CH9 Step 5 — solution-diffusion water flux.", pick(s5, "kwT", "ndp", "flux")),
         "permeate_tds": (
             "CH9 Step 6, flux-effect form: salt permeability Ks(T) of the 5-year element "
-            "(ESS minimum rejection, aged at the CH9 Table 4 rate) diluted by the flux J.",
+            "(ESS minimum rejection 99.7 %, aged 7 %/yr — CH9 Table 4 p. 248) diluted by "
+            "the flux J.",
             [membrane.plant_salt_passage()["worked"][k] for k in ("ksmin", "ksplant", "factor")]
             + pick(s6, "ksT", "cp_flux")),
         "brine_tds": ("CH9 Step 5 — concentration build-up at the solved recovery.",
