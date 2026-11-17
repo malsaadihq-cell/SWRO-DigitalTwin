@@ -30,8 +30,8 @@ SHADE = "#B4553A"     # forbidden-zone tint
 def _kpi_row(r: pump.PumpResult) -> None:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Feed flow (m³/h)", f"{r.flow:.2f}",
-              help="Delivered flow. Law: Q = rated flow × rpm/1500 × health "
-                   "(Danfoss manual, p. 25).")
+              help="Delivered flow: geometric flow (137 cm³/rev × rpm) minus internal "
+                   "leakage, which grows with outlet pressure (Danfoss manual, pp. 24–26).")
     c2.metric("Shaft power (kW)", f"{r.shaft_power:.2f}",
               help="Absorbed power. Equation: P = 16.7 × Q × p_out / 475 "
                    "(Danfoss manual, p. 26).")
@@ -198,8 +198,9 @@ def _assumptions():
     with st.expander("Assumptions & limits", expanded=False):
         st.markdown(
             "- **Steady state** — one settled operating point, no startup or transients.\n"
-            "- **Positive-displacement** — flow is set by shaft speed and treated as "
-            "independent of pressure.\n"
+            "- **Positive-displacement** — flow is set by shaft speed, less an internal "
+            "leakage proportional to the outlet pressure (0.77 m³/h at 60 bar, from the "
+            "Danfoss rated point).\n"
             "- **Efficiency** is bundled inside the manufacturer calc-factor (475); it "
             "is not modelled separately.\n"
             "- **Manufacturer reference is valid only within the Danfoss range** — "
@@ -216,7 +217,6 @@ def render(controls: dict, feed: dict) -> None:
     r = pump.simulate(
         frequency_hz=controls.get("frequency", 40.0),
         outlet_pressure=controls.get("outlet_pressure", 55.0),
-        health_factor=controls.get("health_factor", 100.0) / 100.0,
         inlet_pressure=feed.get("suction", 3.0),
     )
 
