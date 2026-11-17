@@ -92,7 +92,16 @@ MODES = {
         controls=[], kpis=[], charts=[],
         note="System overview — how the whole digital twin fits together.",
     ),
+    "Flowcharts": dict(
+        controls=[], kpis=[], charts=[],
+        note="Logic flowcharts of the pump, membrane, valve and comparison blocks.",
+    ),
 }
+
+# The sidebar shows the working (simulation) blocks and the documentation pages as
+# two separate groups with a gap between them.
+DOC_MODES = ["Architecture", "Flowcharts"]
+SIM_MODES = [m for m in MODES if m not in DOC_MODES]
 
 PLACEHOLDER = "—"
 
@@ -128,16 +137,35 @@ OPERATING_CONTROLS = ["frequency", "outlet_pressure", "feed_pressure",
 WHATIF_CONTROLS: list[str] = []
 
 
+def _pick_sim() -> None:
+    """A simulation block was clicked: clear the documentation group."""
+    if st.session_state.get("mode_sim"):
+        st.session_state["mode_doc"] = None
+    elif not st.session_state.get("mode_doc"):
+        st.session_state["mode_sim"] = "Full system"   # clicking the active one again
+
+
+def _pick_doc() -> None:
+    """A documentation page was clicked: clear the simulation group."""
+    if st.session_state.get("mode_doc"):
+        st.session_state["mode_sim"] = None
+    else:
+        st.session_state["mode_sim"] = "Full system"   # clicking the active one again
+
+
 def sidebar() -> tuple[str, dict, dict]:
     st.sidebar.header("Controls")
-    mode = st.sidebar.segmented_control(
-        "Simulation mode",
-        options=list(MODES.keys()),
-        default="Full system",
-    ) or "Full system"
+    if "mode_sim" not in st.session_state and "mode_doc" not in st.session_state:
+        st.session_state["mode_sim"] = "Full system"
+    sim = st.sidebar.segmented_control("Simulation mode", options=SIM_MODES,
+                                       key="mode_sim", on_change=_pick_sim)
+    st.sidebar.markdown('<div style="height:1.4rem"></div>', unsafe_allow_html=True)
+    doc = st.sidebar.segmented_control("Documentation", options=DOC_MODES,
+                                       key="mode_doc", on_change=_pick_doc)
+    mode = sim or doc or "Full system"
     st.sidebar.caption(MODES[mode]["note"])
 
-    if mode in ("Architecture", EXPERIMENTS_MODE):
+    if mode in DOC_MODES or mode == EXPERIMENTS_MODE:
         return mode, {}, {}
 
     keys = MODES[mode]["controls"]
@@ -246,6 +274,10 @@ def main() -> None:
     if mode == "Architecture":
         import architecture_page
         architecture_page.render()
+        return
+    if mode == "Flowcharts":
+        import flowcharts_page
+        flowcharts_page.render()
         return
 
     # Whole-plant schematic, with the current block highlighted.
