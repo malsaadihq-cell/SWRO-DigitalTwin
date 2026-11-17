@@ -84,7 +84,8 @@ def _same(a, b):
 def test_simulate_backward_compatible():
     """Baseline recorded from the pre-refactor simulate() (commit aa913be).
     Every original field — numbers, worked LaTeX, kpis, warnings — must be
-    bit-identical."""
+    bit-identical. (Nov 2026: the fouling input was removed from the model, so
+    its case and field were dropped and the Kw(T) text lost its '· h' term.)"""
     base = json.loads(BASELINE.read_text(encoding="utf-8"))
     assert base, "baseline fixture is empty"
     for case in base:
