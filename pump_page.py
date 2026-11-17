@@ -52,13 +52,16 @@ def _equations_and_sources(r: pump.PumpResult) -> None:
         with left:
             st.markdown("**Laws used — with the current values plugged in**")
             st.latex(r.worked["rpm"])
+            st.latex(r.worked["leak"])
             st.latex(r.worked["flow"])
             st.latex(r.worked["power"])
             st.latex(r.worked["eta"])
             st.latex(r.worked["sec"])
             st.caption(
-                "Flow law from the Danfoss manual, p. 25 (flow is proportional "
-                "to rpm). Power equation and the calc-factor 475 from p. 26. "
+                "Flow = geometric flow (137 cm³/rev, p. 24) at the motor speed, less an "
+                "internal leakage fixed by the rated point (11.4 m³/h at 1480 rpm and "
+                "60 bar, pp. 24–26) and taken proportional to pressure. Power equation "
+                "and the calc-factor 475 from p. 26. "
                 "Frequency-to-speed ratio from the plant documentation "
                 "(Chapter 4). The exact page for every value is in the table."
             )
@@ -144,13 +147,21 @@ def _style(layer, title):
                             tickColor=INK))
 
 
+RPM_TOP = 1860   # x-axis top: covers 60 Hz (≈1776 rpm), the plant's normal speed
+
+
 def _curve_flow(r, measured):
-    dom = [660, 1540]
-    ref = pd.DataFrame(pump.flow_reference(), columns=["rpm", "flow"])
-    line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3).encode(
+    dom = [660, RPM_TOP]
+    rated = pump.v("rated_rpm")
+    ref = pd.DataFrame(pump.flow_reference(outlet_bar=r.outlet_pressure, hi_rpm=RPM_TOP,
+                                           points=49), columns=["rpm", "flow"])
+    inside, beyond = ref[ref.rpm <= rated], ref[ref.rpm >= rated]
+    line = alt.Chart(inside).mark_line(color=LINE, strokeWidth=3, clip=True).encode(
         x=alt.X("rpm:Q", title="Speed (rpm)", scale=_xscale(dom)),
         y=alt.Y("flow:Q", title="Flow (m³/h)"))
-    layers = _envelope("rpm", 700, 1500, dom) + [line]
+    extra = alt.Chart(beyond).mark_line(color=LINE, strokeWidth=2.5, strokeDash=[6, 4],
+                                        clip=True).encode(x="rpm:Q", y="flow:Q")
+    layers = _envelope("rpm", pump.v("min_rpm"), rated, dom) + [line, extra]
     layers.append(_dot(pd.DataFrame([{"rpm": r.rpm, "flow": r.flow}]),
                        "rpm", "flow", MODEL, "circle",
                        [alt.Tooltip("rpm:Q", format=".0f", title="model rpm"),
@@ -161,16 +172,17 @@ def _curve_flow(r, measured):
                            "rpm", "flow", MEASURED, "diamond",
                            [alt.Tooltip("rpm:Q", format=".0f", title="measured rpm"),
                             alt.Tooltip("flow:Q", format=".2f", title="measured flow")]))
-    return _style(alt.layer(*layers), "Flow vs speed  ·  Danfoss p. 25")
+    return _style(alt.layer(*layers),
+                  f"Flow vs speed at {r.outlet_pressure:.0f} bar  ·  Danfoss pp. 24–25")
 
 
 def _curve_power(r, measured):
     dom = [26, 74]
-    ref = pd.DataFrame(pump.power_reference(r.flow), columns=["pressure", "power"])
+    ref = pd.DataFrame(pump.power_curve(r.rpm), columns=["pressure", "power"])
     line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3).encode(
         x=alt.X("pressure:Q", title="Outlet pressure (bar)", scale=_xscale(dom)),
         y=alt.Y("power:Q", title="Shaft power (kW)"))
-    layers = _envelope("pressure", 30, 70, dom) + [line]
+    layers = _envelope("pressure", pump.v("outlet_min"), pump.v("outlet_max"), dom) + [line]
     layers.append(_dot(pd.DataFrame([{"pressure": r.outlet_pressure, "power": r.shaft_power}]),
                        "pressure", "power", MODEL, "circle",
                        [alt.Tooltip("pressure:Q", format=".1f", title="model p_out"),
@@ -181,7 +193,28 @@ def _curve_power(r, measured):
                            "pressure", "power", MEASURED, "diamond",
                            [alt.Tooltip("pressure:Q", format=".1f", title="measured p_out"),
                             alt.Tooltip("power:Q", format=".2f", title="measured power")]))
-    return _style(alt.layer(*layers), "Power vs pressure  ·  Danfoss p. 26")
+    return _style(alt.layer(*layers), f"Power vs pressure at {r.rpm:.0f} rpm  ·  Danfoss p. 26")
+
+
+def _chart_limits():
+    with st.expander("Limits of these charts", expanded=False):
+        st.markdown(
+            "- **Each line holds the other input fixed**: the flow line is drawn at the "
+            "current outlet pressure, the power line at the current speed. Moving a slider "
+            "redraws the line; the amber point always sits on it.\n"
+            "- **Above 1500 rpm the line is dashed — an extrapolation.** The Danfoss data "
+            "stop at the 1500 rpm maximum continuous speed; the plant runs at about "
+            "1630 rpm (55 Hz) and 1780 rpm (60 Hz), so its normal operating points lie in "
+            "the extrapolated, shaded zone.\n"
+            "- **The leakage term is a model assumption** (laminar leakage proportional to "
+            "pressure), fixed by one manufacturer point (1480 rpm, 60 bar). The manual "
+            "gives no leakage curve to check its shape.\n"
+            "- **Speed is not measured.** rpm = 29.6 × Hz uses the slip of the Danfoss rated "
+            "point; the plant motor's real slip may differ.\n"
+            "- **Power is shaft power from the Danfoss equation** (efficiency inside the "
+            "475 calc-factor). A plant power meter usually reads electrical input, which "
+            "also includes motor and VFD losses, so the two are not the same quantity."
+        )
 
 
 # ---------------------------------------------------------------------
@@ -215,7 +248,7 @@ def _assumptions():
 # ---------------------------------------------------------------------
 def render(controls: dict, feed: dict) -> None:
     r = pump.simulate(
-        frequency_hz=controls.get("frequency", 40.0),
+        frequency_hz=controls.get("frequency", 60.0),
         outlet_pressure=controls.get("outlet_pressure", 55.0),
         inlet_pressure=feed.get("suction", 3.0),
     )
@@ -234,14 +267,16 @@ def render(controls: dict, feed: dict) -> None:
     st.subheader("Performance curves — pump vs Danfoss reference")
     measured = _measured_inputs()
     st.markdown(
-        "**Legend** — :blue[━ line] Danfoss reference  ·  :orange[● amber] model "
-        "point  ·  :violet[◆ purple] your measured reading  ·  shaded = outside "
-        "the Danfoss range"
+        "**Legend** — :blue[━ line] Danfoss reference (dashed = extrapolated)  ·  "
+        ":orange[● amber] model point  ·  :violet[◆ purple] your measured reading  ·  "
+        "shaded = outside the Danfoss range"
     )
     left, right = st.columns(2)
     left.altair_chart(_curve_flow(r, measured), theme=None, width='stretch')
     right.altair_chart(_curve_power(r, measured), theme=None, width='stretch')
-    st.caption("The gap between a point and the line is the wear / lost-efficiency signal.")
+    st.caption("The gap between a measured point and the line is the wear / lost-efficiency "
+               "signal. Dashed = beyond the 1500 rpm rated speed (extrapolated).")
+    _chart_limits()
 
     st.divider()
     _interpretation(r, measured)
