@@ -181,7 +181,9 @@ def simulate(frequency_hz: float, valve_resistance: float, feed_tds: float,
         "brine_p": (rf"P_b = P - \Delta P_{{gauges}} = {P:.2f} - {DP_GAUGES:.2f}"
                     rf" = {P - DP_GAUGES:.2f}\ \mathrm{{bar}}"),
         "recovery": (rf"R = Q_p/Q_{{feed}} = {qp:.2f}/{q_feed:.2f} = {recovery*100:.1f}\%"),
-        "sec": (rf"SEC = P_{{shaft}}/Q_p = {power:.2f}/{qp:.2f} = {sec:.1f}\ \mathrm{{kWh/m^3}}"),
+        "sec": ((rf"SEC = P_{{shaft}}/Q_p = {power:.2f}/{qp:.2f} = {sec:.1f}\ \mathrm{{kWh/m^3}}")
+                if math.isfinite(sec) else
+                (rf"SEC = P_{{shaft}}/Q_p = {power:.2f}/0\quad(\text{{no permeate — undefined}})")),
     }
 
     r = SystemResult(
