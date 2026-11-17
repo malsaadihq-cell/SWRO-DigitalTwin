@@ -4,15 +4,13 @@
    60,
    41000,
    25,
-   10.2,
-   1.0
+   10.2
   ],
   "result": {
    "feed_pressure": 60,
    "feed_tds": 41000,
    "temperature": 25,
    "feed_flow": 10.2,
-   "fouling": 1.0,
    "permeate_flow": 1.0365063882411572,
    "flux": 25.34245448022389,
    "permeate_tds": 95.2780539421255,
@@ -47,7 +45,7 @@
     "cp": "C_p = \\frac{C_{fc}\\,K_s(T)}{J} = \\frac{43314\\times 0.056}{25.3} = 95.3\\ \\mathrm{mg/L}",
     "rej": "\\text{rejection} = 1 - C_p/C_f = 1 - 95.3/41000 = 99.77\\%",
     "rec": "R = Q_p/Q_f = 1.04/10.20 = 10.2\\%",
-    "kwT": "K_w(T) = K_{w,25}\\cdot 1.03^{T-25}\\cdot h = 0.990\\cdot 1.03^{25-25}\\cdot 1.00 = 0.990\\ \\mathrm{L/m^2\\,bar\\,h}",
+    "kwT": "K_w(T) = K_{w,25}\\cdot 1.03^{T-25} = 0.990\\cdot 1.03^{25-25} = 0.990\\ \\mathrm{L/m^2\\,bar\\,h}",
     "ksT": "K_s(T) = K_{s,25}\\cdot 1.03^{T-25} = 0.056\\cdot 1.03^{25-25} = 0.056\\ \\mathrm{L/m^2 h}"
    },
    "converged": true
@@ -58,15 +56,13 @@
    55,
    41000,
    28,
-   10.5,
-   1.0
+   10.5
   ],
   "result": {
    "feed_pressure": 55,
    "feed_tds": 41000,
    "temperature": 28,
    "feed_flow": 10.5,
-   "fouling": 1.0,
    "permeate_flow": 0.9233349068435353,
    "flux": 22.57542559519646,
    "permeate_tds": 115.95205311831882,
@@ -101,62 +97,8 @@
     "cp": "C_p = \\frac{C_{fc}\\,K_s(T)}{J} = \\frac{42973\\times 0.061}{22.6} = 116.0\\ \\mathrm{mg/L}",
     "rej": "\\text{rejection} = 1 - C_p/C_f = 1 - 116.0/41000 = 99.72\\%",
     "rec": "R = Q_p/Q_f = 0.92/10.50 = 8.8\\%",
-    "kwT": "K_w(T) = K_{w,25}\\cdot 1.03^{T-25}\\cdot h = 0.990\\cdot 1.03^{28-25}\\cdot 1.00 = 1.082\\ \\mathrm{L/m^2\\,bar\\,h}",
+    "kwT": "K_w(T) = K_{w,25}\\cdot 1.03^{T-25} = 0.990\\cdot 1.03^{28-25} = 1.082\\ \\mathrm{L/m^2\\,bar\\,h}",
     "ksT": "K_s(T) = K_{s,25}\\cdot 1.03^{T-25} = 0.056\\cdot 1.03^{28-25} = 0.061\\ \\mathrm{L/m^2 h}"
-   },
-   "converged": true
-  }
- },
- {
-  "inputs": [
-   70,
-   38000,
-   30,
-   12.0,
-   0.85
-  ],
-  "result": {
-   "feed_pressure": 70,
-   "feed_tds": 38000,
-   "temperature": 30,
-   "feed_flow": 12.0,
-   "fouling": 0.85,
-   "permeate_flow": 1.5025691142871758,
-   "flux": 36.73763115616567,
-   "permeate_tds": 71.61961988274406,
-   "rejection": 0.9981152731609804,
-   "recovery": 0.12521409285726465,
-   "ndp": 37.654383817016154,
-   "delta_pi": 32.24561618298385,
-   "brine_tds": 43428.32369440367,
-   "brine_flow": 10.497430885712824,
-   "cfc": 40714.16184720183,
-   "beta": 1.1314801189284533,
-   "element_dp": 0.2,
-   "kw_T": 0.9756534945491206,
-   "ks_T": 0.06462456942308074,
-   "kpis": {
-    "permeate_flow": 1.5025691142871758,
-    "flux": 36.73763115616567,
-    "rejection": 99.81152731609804,
-    "recovery": 12.521409285726465,
-    "permeate_tds": 71.61961988274406,
-    "brine_flow": 10.497430885712824,
-    "ratio": 6.986321484914085,
-    "ndp": 37.654383817016154,
-    "delta_pi": 32.24561618298385
-   },
-   "warnings": [],
-   "worked": {
-    "cc": "C_c = C_f\\,\\frac{1-R(1-SR)}{1-R} = 38000\\,\\frac{1-0.125(1-0.998)}{1-0.125} = 43428\\ \\mathrm{mg/L}",
-    "ndp": "NDP = P_f - \\tfrac{\\Delta P_e}{2} - \\Delta\\pi - P_p = 70.0 - 0.1 - 32.2 - 0 = 37.7\\ \\mathrm{bar}",
-    "flux": "J = K_w(T)\\,NDP = 0.976\\times 37.7 = 36.7\\ \\mathrm{L/m^2 h}",
-    "qp": "Q_p = J\\,A/1000 = 36.7\\times 40.9/1000 = 1.50\\ \\mathrm{m^3/h}",
-    "cp": "C_p = \\frac{C_{fc}\\,K_s(T)}{J} = \\frac{40714\\times 0.065}{36.7} = 71.6\\ \\mathrm{mg/L}",
-    "rej": "\\text{rejection} = 1 - C_p/C_f = 1 - 71.6/38000 = 99.81\\%",
-    "rec": "R = Q_p/Q_f = 1.50/12.00 = 12.5\\%",
-    "kwT": "K_w(T) = K_{w,25}\\cdot 1.03^{T-25}\\cdot h = 0.990\\cdot 1.03^{30-25}\\cdot 0.85 = 0.976\\ \\mathrm{L/m^2\\,bar\\,h}",
-    "ksT": "K_s(T) = K_{s,25}\\cdot 1.03^{T-25} = 0.056\\cdot 1.03^{30-25} = 0.065\\ \\mathrm{L/m^2 h}"
    },
    "converged": true
   }
@@ -166,15 +108,13 @@
    40,
    45000,
    20,
-   9.0,
-   1.0
+   9.0
   ],
   "result": {
    "feed_pressure": 40,
    "feed_tds": 45000,
    "temperature": 20,
    "feed_flow": 9.0,
-   "fouling": 1.0,
    "permeate_flow": 0.13906204840395622,
    "flux": 3.4000500832263136,
    "permeate_tds": 641.4169149506092,
@@ -209,7 +149,7 @@
     "cp": "C_p = \\frac{C_{fc}\\,K_s(T)}{J} = \\frac{45352\\times 0.048}{3.4} = 641.4\\ \\mathrm{mg/L}",
     "rej": "\\text{rejection} = 1 - C_p/C_f = 1 - 641.4/45000 = 98.57\\%",
     "rec": "R = Q_p/Q_f = 0.14/9.00 = 1.5\\%",
-    "kwT": "K_w(T) = K_{w,25}\\cdot 1.03^{T-25}\\cdot h = 0.990\\cdot 1.03^{20-25}\\cdot 1.00 = 0.854\\ \\mathrm{L/m^2\\,bar\\,h}",
+    "kwT": "K_w(T) = K_{w,25}\\cdot 1.03^{T-25} = 0.990\\cdot 1.03^{20-25} = 0.854\\ \\mathrm{L/m^2\\,bar\\,h}",
     "ksT": "K_s(T) = K_{s,25}\\cdot 1.03^{T-25} = 0.056\\cdot 1.03^{20-25} = 0.048\\ \\mathrm{L/m^2 h}"
    },
    "converged": true
@@ -220,15 +160,13 @@
    30,
    41000,
    25,
-   10.2,
-   1.0
+   10.2
   ],
   "result": {
    "feed_pressure": 30,
    "feed_tds": 41000,
    "temperature": 25,
    "feed_flow": 10.2,
-   "fouling": 1.0,
    "permeate_flow": 0.0,
    "flux": 0.0,
    "permeate_tds": 0.0,
@@ -263,7 +201,7 @@
     "cp": "C_p = \\frac{C_{fc}\\,K_s(T)}{J} = \\frac{41000\\times 0.056}{0.0} = 0.0\\ \\mathrm{mg/L}",
     "rej": "\\text{rejection} = 1 - C_p/C_f = 1 - 0.0/41000 = 100.00\\%",
     "rec": "R = Q_p/Q_f = 0.00/10.20 = 0.0\\%",
-    "kwT": "K_w(T) = K_{w,25}\\cdot 1.03^{T-25}\\cdot h = 0.990\\cdot 1.03^{25-25}\\cdot 1.00 = 0.990\\ \\mathrm{L/m^2\\,bar\\,h}",
+    "kwT": "K_w(T) = K_{w,25}\\cdot 1.03^{T-25} = 0.990\\cdot 1.03^{25-25} = 0.990\\ \\mathrm{L/m^2\\,bar\\,h}",
     "ksT": "K_s(T) = K_{s,25}\\cdot 1.03^{T-25} = 0.056\\cdot 1.03^{25-25} = 0.056\\ \\mathrm{L/m^2 h}"
    },
    "converged": true
@@ -274,15 +212,13 @@
    85,
    41000,
    25,
-   10.2,
-   1.0
+   10.2
   ],
   "result": {
    "feed_pressure": 85,
    "feed_tds": 41000,
    "temperature": 25,
    "feed_flow": 10.2,
-   "fouling": 1.0,
    "permeate_flow": 1.9664177626237485,
    "flux": 48.07867390278114,
    "permeate_tds": 53.20362025338223,
@@ -321,7 +257,7 @@
     "cp": "C_p = \\frac{C_{fc}\\,K_s(T)}{J} = \\frac{45886\\times 0.056}{48.1} = 53.2\\ \\mathrm{mg/L}",
     "rej": "\\text{rejection} = 1 - C_p/C_f = 1 - 53.2/41000 = 99.87\\%",
     "rec": "R = Q_p/Q_f = 1.97/10.20 = 19.3\\%",
-    "kwT": "K_w(T) = K_{w,25}\\cdot 1.03^{T-25}\\cdot h = 0.990\\cdot 1.03^{25-25}\\cdot 1.00 = 0.990\\ \\mathrm{L/m^2\\,bar\\,h}",
+    "kwT": "K_w(T) = K_{w,25}\\cdot 1.03^{T-25} = 0.990\\cdot 1.03^{25-25} = 0.990\\ \\mathrm{L/m^2\\,bar\\,h}",
     "ksT": "K_s(T) = K_{s,25}\\cdot 1.03^{T-25} = 0.056\\cdot 1.03^{25-25} = 0.056\\ \\mathrm{L/m^2 h}"
    },
    "converged": true
