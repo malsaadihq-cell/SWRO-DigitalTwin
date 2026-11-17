@@ -49,7 +49,7 @@ def _latex(worked: dict, keys) -> None:
         st.latex(worked[k])
 
 
-def _steps(r: m.MembraneResult) -> None:
+def _steps(r: m.MembraneResult, age: float) -> None:
     """The seven CH9 design steps (report Ch. 3, Section 3.3), each with the
     current values substituted."""
     w = r.step_worked
@@ -99,6 +99,12 @@ def _steps(r: m.MembraneResult) -> None:
 
     with st.expander("Step 6 — Permeate quality (constant SR vs flux effect)", expanded=False):
         st.caption("IWA Ch. 9, p. 259 · two formulations side by side.")
+        st.markdown(f"*Salt permeability of the installed element ({age:g} years)*")
+        st.caption("ESS minimum rejection 99.7 % (CH9 p. 247, 259), aged 7 %/yr — CH9 "
+                   "Table 4 p. 248, Hydranautics, surface intake.")
+        pw = m.plant_salt_passage(age)["worked"]
+        for key in ("ksmin", "ksplant", "factor"):
+            st.latex(pw[key])
         _latex(w["step6"], ("ksT",))
         c1, c2 = st.columns(2)
         with c1:
@@ -195,7 +201,7 @@ def _style(layer, title):
 def _curve_flux(r, feed, measured):
     dom = [30, 85]
     ref = pd.DataFrame(m.flux_reference(feed["tds"], feed["temperature"],
-                                        feed["feed_flow"], r.fouling),
+                                        feed["feed_flow"]),
                        columns=["pressure", "flux"])
     line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3, clip=True).encode(
         x=alt.X("pressure:Q", title="Feed pressure (bar)", scale=_xscale(dom)),
@@ -217,7 +223,7 @@ def _curve_flux(r, feed, measured):
 def _curve_rejection(r, feed, measured):
     dom = [30, 85]
     data = [(pf, rj) for pf, rj in m.rejection_reference(
-        feed["tds"], feed["temperature"], feed["feed_flow"], r.fouling) if rj is not None]
+        feed["tds"], feed["temperature"], feed["feed_flow"]) if rj is not None]
     ref = pd.DataFrame(data, columns=["pressure", "rejection"])
     line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3, clip=True).encode(
         x=alt.X("pressure:Q", title="Feed pressure (bar)", scale=_xscale(dom)),
@@ -240,7 +246,7 @@ def _curve_rejection(r, feed, measured):
 def _curve_flux_vs_temp(r, feed):
     dom = [15, 42]
     ref = pd.DataFrame(m.flux_vs_temperature(r.feed_pressure, feed["tds"],
-                                             feed["feed_flow"], r.fouling),
+                                             feed["feed_flow"]),
                        columns=["temp", "flux"])
     line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3, clip=True).encode(
         x=alt.X("temp:Q", title="Feed temperature (°C)", scale=_xscale(dom)),
@@ -255,7 +261,7 @@ def _curve_flux_vs_temp(r, feed):
 def _curve_flux_vs_salinity(r, feed):
     dom = [30000, 50000]
     ref = pd.DataFrame(m.flux_vs_salinity(r.feed_pressure, feed["temperature"],
-                                          feed["feed_flow"], r.fouling),
+                                          feed["feed_flow"]),
                        columns=["tds", "flux"])
     line = alt.Chart(ref).mark_line(color=LINE, strokeWidth=3, clip=True).encode(
         x=alt.X("tds:Q", title="Feed TDS (mg/L)", scale=_xscale(dom),
@@ -286,20 +292,26 @@ def _assumptions():
             "replaced by a seawater correlation later.\n"
             "- **Concentration polarisation (β)** is reported as a check only; its effect "
             "on the driving pressure is neglected in this first version.\n"
-            "- **Kw and Ks** start from the values the book derives from the element test; "
-            "they are **not yet calibrated to our element** (the ESS notes ±15 % variation "
-            "between elements). Calibration comes from the field measurements.\n"
+            "- **Kw** is the value the book derives from the element test (catalogue). It is "
+            "not aged: chemical cleaning restores water permeability.\n"
+            "- **Ks** is the installed element's: derived at the ESS minimum rejection "
+            "(99.7 %) and aged 7 %/yr for its age (CH9 Table 4 p. 248, Hydranautics, surface "
+            "intake) — salt-passage increase is not recovered by cleaning.\n"
+            "- **Membrane age** comes from the plant records; the element changes, so it is "
+            "an input, not a tuning knob. Neither Kw nor Ks is calibrated to the plant yet "
+            "(the ESS notes ±15 % variation between elements).\n"
             "- **Temperature correction** is ~3 % per °C."
         )
 
 
 def render(controls: dict, feed: dict) -> None:
+    age = feed.get("membrane_age", m.p("age"))
     r = m.simulate(
         feed_pressure=controls.get("feed_pressure", 55.0),
-        feed_tds=feed.get("tds", 41000.0),
-        temperature=feed.get("temperature", 28.0),
-        feed_flow=feed.get("feed_flow", 10.5),
-        fouling=controls.get("fouling", 100.0) / 100.0,
+        feed_tds=feed.get("tds", 37250.0),
+        temperature=feed.get("temperature", 29.0),
+        feed_flow=feed.get("feed_flow", 14.1),
+        salt_passage=m.salt_passage_for_age(age),
     )
 
     if not r.converged:
@@ -312,22 +324,24 @@ def render(controls: dict, feed: dict) -> None:
 
     st.divider()
     st.subheader("Where these numbers come from")
-    _steps(r)
+    _steps(r, age)
     _parameters()
 
     st.divider()
     st.subheader("Performance curves — element vs reference")
     measured = _measured_inputs()
     st.markdown(
-        "**Legend** — :blue[━ line] book/ESS reference  ·  :orange[● amber] model "
-        "point  ·  :violet[◆ purple] your measured reading  ·  shaded = above the "
-        "element's max pressure"
+        "**Legend** — :blue[━ line] new element (catalogue, ESS / IWA Ch. 9)  ·  "
+        ":orange[● amber] installed element (its age sets the salt passage)  ·  "
+        ":violet[◆ purple] your measured reading  ·  shaded = above the element's max "
+        "pressure"
     )
     a1, a2 = st.columns(2)
     a1.altair_chart(_curve_flux(r, feed, measured), theme=None, width='stretch')
     a2.altair_chart(_curve_rejection(r, feed, measured), theme=None, width='stretch')
-    st.caption("Flux rises only once the feed pressure beats the osmotic pressure; the gap "
-               "between a point and the line is the fouling / ageing signal.")
+    st.caption("Flux rises only once the feed pressure beats the osmotic pressure. Water "
+               "permeability is not aged, so the amber point sits on the flux line; on the "
+               "rejection chart the gap below the line is the ageing of the installed element.")
 
     st.markdown("**Sensitivity to the feed conditions you measure** — the amber dot is the "
                 "current point; these help you read and normalise field data.")
