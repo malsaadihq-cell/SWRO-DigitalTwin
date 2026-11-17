@@ -67,9 +67,9 @@ ELEMENT_DP = membrane.p("dPe")   # element's own loss, used inside the membrane 
 P_MIN, P_MAX = 0.1, 82.7         # search bounds (bar); 82.7 = membrane max
 
 
-def feed_flow(frequency_hz: float, pressure: float, health: float = 1.0) -> float:
+def feed_flow(frequency_hz: float, pressure: float) -> float:
     """Feed flow the PD pump delivers at this outlet pressure (core/pump.py)."""
-    return pump.nominal_flow(pump.rpm_from_frequency(frequency_hz), pressure) * health
+    return pump.nominal_flow(pump.rpm_from_frequency(frequency_hz), pressure)
 
 
 def membrane_inlet_pressure(P: float) -> float:
@@ -81,10 +81,10 @@ def membrane_inlet_pressure(P: float) -> float:
     return P - (DP_GAUGES - ELEMENT_DP) / 2.0
 
 
-def _state(P, resistance, feed_tds, temperature, frequency_hz, health, fouling, salt_passage):
-    q_feed = feed_flow(frequency_hz, P, health)
+def _state(P, resistance, feed_tds, temperature, frequency_hz, salt_passage):
+    q_feed = feed_flow(frequency_hz, P)
     mr = membrane.simulate(membrane_inlet_pressure(P), feed_tds, temperature, q_feed,
-                           fouling, salt_passage)
+                           salt_passage)
     qb = max(q_feed - mr.permeate_flow, 0.0)
     vr = valve.simulate(resistance, qb)
     residual = vr.delta_p - (P - DP_GAUGES)
@@ -123,13 +123,17 @@ class SystemResult:
 
 
 def simulate(frequency_hz: float, valve_resistance: float, feed_tds: float,
-             temperature: float, health: float = 1.0, fouling: float = 1.0,
-             suction: float = 3.0, salt_passage: float | None = None) -> SystemResult:
-    sp = membrane.PLANT_SALT_PASSAGE if salt_passage is None else salt_passage
+             temperature: float, suction: float = 3.0,
+             salt_passage: float | None = None,
+             membrane_age: float | None = None) -> SystemResult:
+    """Solve the coupled plant. The installed membrane's salt passage comes from
+    `membrane_age` (years, from the plant records; None = default age), unless a
+    `salt_passage` multiplier is given directly."""
+    sp = membrane.salt_passage_for_age(membrane_age) if salt_passage is None else salt_passage
 
     def res(P):
         return _state(P, valve_resistance, feed_tds, temperature, frequency_hz,
-                      health, fouling, sp)[0]
+                      sp)[0]
 
     lo, hi = P_MIN, P_MAX
     flo, fhi = res(lo), res(hi)
@@ -152,9 +156,9 @@ def simulate(frequency_hz: float, valve_resistance: float, feed_tds: float,
         P = 0.5 * (lo + hi)
 
     _, mr, qb, vr, q_feed = _state(P, valve_resistance, feed_tds, temperature,
-                                   frequency_hz, health, fouling, sp)
+                                   frequency_hz, sp)
     p_in = membrane_inlet_pressure(P)
-    pw = pump.flow_worked(frequency_hz, P, health)
+    pw = pump.flow_worked(frequency_hz, P)
     power = pump.shaft_power(q_feed, P)
     qp = mr.permeate_flow
     recovery = (qp / q_feed) if q_feed > 0 else 0.0
@@ -223,13 +227,13 @@ def _warnings(r, mr, vr):
 K_SWEEP = (0.05, 1.00)     # bar/(m³/h)² — measured 0.106 – 0.357 at 60 Hz; lower Hz needs higher K
 
 
-def sweep_valve(frequency_hz, feed_tds, temperature, health=1.0, fouling=1.0,
+def sweep_valve(frequency_hz, feed_tds, temperature,
                 lo=K_SWEEP[0], hi=K_SWEEP[1], points=34):
     return [simulate(frequency_hz, lo + (hi - lo) * i / (points - 1), feed_tds,
-                     temperature, health, fouling) for i in range(points)]
+                     temperature) for i in range(points)]
 
 
-def sweep_frequency(valve_resistance, feed_tds, temperature, health=1.0, fouling=1.0,
+def sweep_frequency(valve_resistance, feed_tds, temperature,
                     lo=24.0, hi=60.0, points=37):
     return [simulate(lo + (hi - lo) * i / (points - 1), valve_resistance, feed_tds,
-                     temperature, health, fouling) for i in range(points)]
+                     temperature) for i in range(points)]
