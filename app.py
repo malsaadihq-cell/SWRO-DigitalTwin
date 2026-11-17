@@ -49,7 +49,7 @@ CHARTS = {
     "brine_vs_k":      ("Back-pressure vs valve resistance", "Valve resistance K", "Back-pressure (bar)"),
 }
 
-EXPERIMENTS_MODE = "Full system - with Experiments"
+EXPERIMENTS_MODE = "Simulation & Experiments Comparison"
 
 MODES = {
     "Full system": dict(
