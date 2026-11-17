@@ -103,8 +103,8 @@ def _parse(data: bytes):
 
 
 @st.cache_data(show_spinner="Solving the coupled plant…")
-def _solve(freq: float, k: float, tds: float, temp: float):
-    r = S.simulate(freq, k, tds, temp)
+def _solve(freq: float, k: float, tds: float, temp: float, age: float):
+    r = S.simulate(freq, k, tds, temp, membrane_age=age)
     # the membrane result at the solved point (element inlet pressure, plant
     # salt passage) comes with the system result, so its CH9 working can be shown
     vr = valve.simulate(k, r.brine_flow)
@@ -148,7 +148,7 @@ def _sim_values(r, mr) -> dict:
 # ---------------------------------------------------------------------------
 # 3 — inputs
 # ---------------------------------------------------------------------------
-def _inputs(e: X.Experiment) -> None:
+def _inputs(e: X.Experiment, age: float, age_from_sheet: bool) -> None:
     def kv(k, v, u):
         return f'<div class="fx-kv"><span class="k">{k}</span><span class="v">{v}<small>{u}</small></span></div>'
 
@@ -167,6 +167,11 @@ def _inputs(e: X.Experiment) -> None:
         f'<p class="sub">Also from {e.label}; they enter the membrane model.</p>'
         + kv("Feed salinity (TDS)", _fmt(e.feed_tds, 0), "mg/L")
         + kv("Feed temperature", _fmt(e.feed_temperature, 1), "°C")
+        + kv("Membrane age", f"{age:g}", "years")
+        + ('<p class="sub" style="margin:0">Membrane age from the workbook.</p>'
+           if age_from_sheet else
+           '<p class="sub" style="margin:0">Membrane age not in the workbook — value entered '
+           'above (from the plant records).</p>')
         + '</div>'
     )
     mp = membrane.PARAMS
@@ -181,8 +186,6 @@ def _inputs(e: X.Experiment) -> None:
         + kv("Salt-passage increase", f"{mp['sp_increase'].value*100:.0f}", "% / year")
         + '<p class="sub" style="margin:0 0 .3rem">CH9 Table 4 p. 248 — Hydranautics, '
           'surface intake</p>'
-        + kv("Membrane age", f"{mp['age'].value:.0f}", "years")
-        + '<p class="sub" style="margin:0 0 .3rem">Plant information — to be confirmed</p>'
         + '</div>'
     )
     cards = drive + cond + (fixed if SHOW_MODEL_DEFAULTS else "")
@@ -234,7 +237,7 @@ def _comparison(sim: dict, lab: dict) -> None:
 # ---------------------------------------------------------------------------
 # 5 — equations
 # ---------------------------------------------------------------------------
-def _equations(r, mr, vr) -> dict:
+def _equations(r, mr, vr, age: float) -> dict:
     sw, s5, s6 = r.worked, mr.step_worked.get("step5", {}), mr.step_worked.get("step6", {})
     P = r.operating_pressure
     cf = pump.v("calc_factor")
@@ -271,10 +274,11 @@ def _equations(r, mr, vr) -> dict:
         "recovery": ("Permeate over feed.", pick(sw, "recovery")),
         "flux": ("CH9 Step 5 — solution-diffusion water flux.", pick(s5, "kwT", "ndp", "flux")),
         "permeate_tds": (
-            "CH9 Step 6, flux-effect form: salt permeability Ks(T) of the 5-year element "
-            "(ESS minimum rejection 99.7 %, aged 7 %/yr — CH9 Table 4 p. 248) diluted by "
-            "the flux J.",
-            [membrane.plant_salt_passage()["worked"][k] for k in ("ksmin", "ksplant", "factor")]
+            f"CH9 Step 6, flux-effect form: salt permeability Ks(T) of the installed element "
+            f"({age:g} years: ESS minimum rejection 99.7 %, aged 7 %/yr — CH9 Table 4 p. 248) "
+            f"diluted by the flux J. Water permeability Kw is not aged: cleaning restores it, "
+            f"while the salt-passage increase is not recovered.",
+            [membrane.plant_salt_passage(age)["worked"][k] for k in ("ksmin", "ksplant", "factor")]
             + pick(s6, "ksT", "cp_flux")),
         "brine_tds": ("CH9 Step 5 — concentration build-up at the solved recovery.",
                       pick(s5, "cc")),
@@ -362,13 +366,20 @@ def render(controls: dict | None = None, feed: dict | None = None) -> None:
 
     # 3 — inputs
     _step(3, f"Simulation inputs for {e.label}")
-    _inputs(e)
+    age_from_sheet = e.membrane_age is not None
+    if age_from_sheet:
+        age = e.membrane_age
+    else:
+        age = st.number_input(
+            "Membrane age (years) — not in the workbook; enter it from the plant records",
+            min_value=0.0, max_value=20.0, value=float(membrane.p("age")), step=0.5)
+    _inputs(e, age, age_from_sheet)
     if not all(_ok(x) for x in (e.frequency, e.valve_resistance, e.feed_tds, e.feed_temperature)):
         st.error(f"{e.label} is missing an input (frequency, brine pressure / flow, feed TDS "
                  "or temperature), so it cannot be simulated.")
         return
 
-    r, mr, vr = _solve(e.frequency, e.valve_resistance, e.feed_tds, e.feed_temperature)
+    r, mr, vr = _solve(e.frequency, e.valve_resistance, e.feed_tds, e.feed_temperature, age)
     if not r.converged:
         st.info("The solver found no pressure balance inside 0.1–82.7 bar for these "
                 "inputs; the values below are at the nearest bound.")
@@ -387,6 +398,6 @@ def render(controls: dict | None = None, feed: dict | None = None) -> None:
     # 5 — equations
     _step(5, "How each simulated value was calculated")
     st.caption(f"Every line is the model's own equation with {e.label}'s numbers substituted.")
-    _equation_section(_equations(r, mr, vr), lab)
+    _equation_section(_equations(r, mr, vr, age), lab)
     st.markdown("")
     _full_steps(mr)
