@@ -1,296 +1,300 @@
-"""Digital twin of the Rabigh pilot SWRO plant — interface foundation.
+"""Experiment workbook reader — the data side of "Full system - with Experiments".
 
-This is the SHELL only: the controls, the KPI slots, the chart slots, and
-one clearly-marked seam where the model will plug in. There is no physics
-here yet. Every result reads "—" until the pump / membrane / valve models
-are connected, one block at a time.
+Reads the lab workbook (sheet "Readings": one row per parameter, one column
+per experiment "Exp 1", "Exp 2", ...) and splits each experiment into the
+three kinds of data the page needs:
 
-Run:  streamlit run app.py
+    1. inputs      — the two knobs the twin is driven with:
+                     VFD frequency (Hz) and brine-valve resistance K, computed here
+                     from the run's own brine pressure and brine flow (K = P_b / Q_b²)
+                     because the hand-wheel position is never recorded
+    2. conditions  — feed salinity (TDS, mg/L) and feed temperature (°C)
+    3. lab results — what the plant measured (plus quantities derived
+                     directly from those measurements: Qf = Qp + Qb, R, J, rejection)
+
+The number of experiments is detected from the header row, so adding a new
+column "Exp 10" in Excel is enough — no code change.
+
+Pure Python: no Streamlit here, so it can be unit-tested on its own.
+Pressures in PSI are converted to bar ONCE, at load, using the unit column.
 """
 from __future__ import annotations
 
-import streamlit as st
+import io
+import re
+from dataclasses import dataclass, field
 
-# ---------------------------------------------------------------------
-# What each simulation mode exposes.
-#
-# This one dict is the backbone of the page: it says, per mode, which
-# controls are live, which KPIs are shown, and which charts are drawn.
-# Adding or changing a mode is a data edit here, not new UI code.
-# ---------------------------------------------------------------------
-CONTROLS = {
-    "frequency":      dict(label="VFD frequency", unit="Hz",  min=24.0, max=60.0,  default=60.0, step=0.5),
-    "outlet_pressure": dict(label="Pump outlet pressure", unit="bar", min=30.0, max=70.0, default=55.0, step=0.5),
-    "valve_resistance": dict(label="Brine valve resistance K", unit="bar per (m³/h)²", min=0.05, max=1.00, default=0.231, step=0.001, fmt="%.3f"),
-    "feed_pressure":  dict(label="Feed pressure", unit="bar", min=30.0, max=70.0,  default=55.0, step=0.5),
-    "valve_dp":       dict(label="Pressure drop across valve", unit="bar", min=1.0, max=80.0, default=54.0, step=1.0),
-    "brine_flow":     dict(label="Brine flow to pass", unit="m³/h", min=0.0, max=20.0, default=13.5, step=0.1),
-}
+import openpyxl
 
-KPIS = {
-    "recovery":      dict(label="Recovery", unit="%"),
-    "flux":          dict(label="Permeate flux", unit="LMH"),
-    "rejection":     dict(label="Salt rejection", unit="%"),
-    "sec":           dict(label="Specific energy", unit="kWh/m³"),
-    "feed_flow":     dict(label="Feed flow", unit="m³/h"),
-    "permeate_flow": dict(label="Permeate flow", unit="m³/h"),
-    "brine_flow":    dict(label="Brine flow", unit="m³/h"),
-    "shaft_power":   dict(label="Shaft power", unit="kW"),
-    "valve_flow":    dict(label="Brine flow", unit="m³/h"),
-}
+PSI_TO_BAR = 0.0689476
+MEMBRANE_AREA_DEFAULT = 40.9      # m², SWC4 MAX — overridden by core.membrane if passed
 
-# (title, x-axis label, y-axis label)
-CHARTS = {
-    "flux_vs_p":       ("Permeate flux vs feed pressure", "Feed pressure (bar)", "Flux (LMH)"),
-    "sec_vs_rec":      ("Specific energy vs recovery",    "Recovery (%)",        "SEC (kWh/m³)"),
-    "rej_vs_p":        ("Salt rejection vs feed pressure", "Feed pressure (bar)", "Salt rejection (%)"),
-    "flow_vs_freq":    ("Feed flow vs VFD frequency",     "Frequency (Hz)",      "Feed flow (m³/h)"),
-    "power_vs_p":      ("Shaft power vs feed pressure",   "Feed pressure (bar)", "Shaft power (kW)"),
-    "brine_vs_k":      ("Back-pressure vs valve resistance", "Valve resistance K", "Back-pressure (bar)"),
-}
+# Parameter-row labels in the workbook → internal key. Matched as a regex on the
+# lower-cased label, first match wins, so the order matters for overlapping names.
+ROW_PATTERNS: list[tuple[str, str]] = [
+    ("frequency",      r"^frequency"),
+    ("feed_tds",       r"^feed\s*salinity"),
+    ("brine_ec",       r"^brine.*conductivity"),
+    ("perm_ec",        r"^permeate\s*conductivity"),
+    ("feed_ec",        r"feed\s*conductivity"),
+    ("feed_temp",      r"^feed\s*temperature"),
+    ("feed_pressure",  r"feed\s*pressure"),
+    ("brine_pressure", r"brine\s*pressure"),
+    ("permeate_flow",  r"^permeate\s*flow"),
+    ("brine_flow",     r"^brine\s*flow"),
+    ("permeate_tds",   r"^permeate.*salinity"),
+    ("brine_tds",      r"^brine\s*salinity"),
+    ("power",          r"power"),
+    ("sec",            r"specific\s*energy"),
+    ("beta",           r"polari[sz]ation"),
+    ("membrane_age",   r"membrane\s*age"),
+]
 
-EXPERIMENTS_MODE = "Full system - with Experiments"
+# Parameters block at the bottom of the sheet (label in col B, value in col C).
+PARAM_PATTERNS: list[tuple[str, str]] = [
+    ("k_feed", r"^k\s*\(feed\)"),
+    ("k_brine", r"^k\s*\(brine\)"),
+    ("k_perm", r"^k\s*\(product"),
+]
 
-MODES = {
-    "Full system": dict(
-        controls=["frequency", "valve_resistance"],
-        kpis=["recovery", "flux", "rejection", "sec"],
-        charts=["flux_vs_p", "sec_vs_rec", "rej_vs_p"],
-        note="Both knobs are live. "
-             "The model solves the operating point and every KPI.",
-    ),
-    EXPERIMENTS_MODE: dict(
-        controls=[], kpis=[], charts=[],
-        note="Load the lab workbook, pick an experiment: its frequency, valve resistance "
-             "and feed conditions drive the full plant, and the simulated results are "
-             "set beside the measured ones. No parameter is adjusted.",
-    ),
-    "Pump only": dict(
-        controls=["frequency", "outlet_pressure"],
-        kpis=["feed_flow", "shaft_power"],
-        charts=["flow_vs_freq", "power_vs_p"],
-        note="Danfoss APP 11/1500. Frequency sets flow; outlet pressure is a "
-             "free input here (in the full system it is solved).",
-    ),
-    "Membrane only": dict(
-        controls=["feed_pressure"],
-        kpis=["permeate_flow", "flux", "rejection"],
-        charts=["flux_vs_p", "rej_vs_p"],
-        note="Drive the element with a feed pressure directly; the pump is out of the "
-             "loop here. Feed TDS, temperature and flow come from the feed conditions "
-             "below; the membrane age sets the installed element's salt passage.",
-    ),
-    "Valve only": dict(
-        controls=["valve_resistance", "brine_flow"],
-        kpis=["valve_flow"],
-        charts=["brine_vs_k"],
-        note="The valve is a resistance K, measured from its effect (brine pressure ÷ "
-             "brine flow²) because the hand-wheel position is not recorded. The model "
-             "gives the back-pressure K·Q² (which sets the recovery).",
-    ),
-    "Architecture": dict(
-        controls=[], kpis=[], charts=[],
-        note="System overview — how the whole digital twin fits together.",
-    ),
-}
-
-PLACEHOLDER = "—"
+EXP_HEADER = re.compile(r"^\s*exp(?:eriment)?\.?\s*(\d+)\s*$", re.IGNORECASE)
 
 
-# ---------------------------------------------------------------------
-# The model seam. Empty on purpose.
-# ---------------------------------------------------------------------
-def run_model(mode: str, controls: dict, feed: dict):
-    """Where the pump / membrane / valve models will connect.
+class WorkbookError(ValueError):
+    """The workbook is not in the expected layout; the message says what is missing."""
 
-    Returns None for now, which tells the whole page to render its empty
-    state. When we build a block, this returns a result object and the
-    KPIs and charts fill themselves in — no other UI code changes.
-    """
+
+@dataclass
+class Experiment:
+    number: int                      # the N in "Exp N"
+    label: str                       # "Exp N" as written in the header
+    raw: dict = field(default_factory=dict)        # key -> value as stored (after PSI→bar)
+    units: dict = field(default_factory=dict)      # key -> unit text from the sheet
+    labels: dict = field(default_factory=dict)     # key -> parameter label from the sheet
+    notes: list = field(default_factory=list)      # conversions applied, readable
+
+    # ---- 1. simulation inputs ------------------------------------------------
+    @property
+    def frequency(self):
+        return self.raw.get("frequency")
+
+    @property
+    def valve_resistance(self):
+        """Measured valve resistance K = P_brine / Q_brine²  [bar per (m³/h)²].
+        Computed from the raw readings, not read from the sheet, so it does not
+        depend on the workbook's formulas having been recalculated."""
+        p, q = self.raw.get("brine_pressure"), self.raw.get("brine_flow")
+        if p is None or not q:
+            return None
+        return p / q ** 2
+
+    # ---- 2. conditions --------------------------------------------------------
+    @property
+    def feed_tds(self):
+        return self.raw.get("feed_tds")
+
+    @property
+    def feed_temperature(self):
+        return self.raw.get("feed_temp")
+
+    @property
+    def membrane_age(self):
+        """Age of the installed element in years — optional row 'Membrane age'
+        in the workbook (the element changes between campaigns). None if absent."""
+        return self.raw.get("membrane_age")
+
+
+@dataclass
+class Workbook:
+    sheet: str
+    experiments: list[Experiment]
+    params: dict
+
+    @property
+    def count(self) -> int:
+        return len(self.experiments)
+
+    def get(self, number: int) -> Experiment:
+        for e in self.experiments:
+            if e.number == number:
+                return e
+        raise KeyError(number)
+
+
+def _num(v):
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(str(v).replace(",", "").strip())
+    except ValueError:
+        return None
+
+
+def _match(label: str, patterns) -> str | None:
+    low = re.sub(r"\s+", " ", str(label)).strip().lower()
+    for key, pat in patterns:
+        if re.search(pat, low):
+            return key
     return None
 
 
-# ---------------------------------------------------------------------
-# UI pieces
-# ---------------------------------------------------------------------
-def _slider(key: str) -> float:
-    c = CONTROLS[key]
-    return st.sidebar.slider(
-        f"{c['label']} ({c['unit']})",
-        min_value=c["min"], max_value=c["max"],
-        value=c["default"], step=c["step"], format=c.get("fmt"),
-    )
+def _find_sheet(wb):
+    for name in wb.sheetnames:
+        if name.strip().lower() == "readings":
+            return wb[name]
+    # otherwise the first sheet that has an "Exp N" header
+    for ws in wb.worksheets:
+        for row in ws.iter_rows(max_row=15, values_only=True):
+            if any(isinstance(c, str) and EXP_HEADER.match(c) for c in row):
+                return ws
+    raise WorkbookError("No sheet with experiment columns (“Exp 1”, “Exp 2”, …) was found.")
 
 
-# controls that set the operating point vs. controls that inject a fault
-OPERATING_CONTROLS = ["frequency", "outlet_pressure", "feed_pressure",
-                      "valve_resistance", "valve_dp", "brine_flow"]
-WHATIF_CONTROLS: list[str] = []
+def load_workbook(source) -> Workbook:
+    """`source` is a path, bytes, or a file-like object (e.g. a Streamlit upload)."""
+    if hasattr(source, "read"):
+        data = source.read()
+        source = io.BytesIO(data if isinstance(data, bytes) else data.encode())
+    elif isinstance(source, (bytes, bytearray)):
+        source = io.BytesIO(source)
+    wb = openpyxl.load_workbook(source, data_only=True, read_only=True)
+    ws = _find_sheet(wb)
+    rows = [list(r) for r in ws.iter_rows(values_only=True)]
+
+    # ---- header row: the one holding "Exp N" cells -------------------------
+    hdr_i = next((i for i, r in enumerate(rows)
+                  if any(isinstance(c, str) and EXP_HEADER.match(c) for c in r)), None)
+    if hdr_i is None:
+        raise WorkbookError("No header row with “Exp 1”, “Exp 2”, … was found.")
+    hdr = rows[hdr_i]
+    low = [str(c).strip().lower() if c is not None else "" for c in hdr]
+    label_col = low.index("parameter") if "parameter" in low else 1
+    unit_col = low.index("unit") if "unit" in low else None
+    exp_cols = [(j, int(EXP_HEADER.match(c).group(1)), c.strip())
+                for j, c in enumerate(hdr) if isinstance(c, str) and EXP_HEADER.match(c)]
+
+    # ---- parameter rows ------------------------------------------------------
+    found: dict[str, tuple[int, str, str]] = {}      # key -> (row index, label, unit)
+    params: dict[str, float] = {}
+    for i in range(hdr_i + 1, len(rows)):
+        r = rows[i]
+        lab = r[label_col] if label_col < len(r) else None
+        if not isinstance(lab, str) or not lab.strip():
+            continue
+        key = _match(lab, ROW_PATTERNS)
+        if key and key not in found:
+            unit = str(r[unit_col]).strip() if unit_col is not None and r[unit_col] else ""
+            found[key] = (i, lab.strip(), unit)
+            continue
+        pkey = _match(lab, PARAM_PATTERNS)
+        if pkey and pkey not in params:
+            val = next((_num(c) for c in r[label_col + 1:label_col + 3] if _num(c) is not None), None)
+            if val is not None:
+                params[pkey] = val
+
+    missing = [k for k in ("frequency", "brine_pressure", "brine_flow", "feed_temp")
+               if k not in found]
+    if "feed_tds" not in found and "feed_ec" not in found:
+        missing.append("feed_tds")
+    if missing:
+        raise WorkbookError("These rows were not found on the sheet: " + ", ".join(missing))
+
+    # ---- build one Experiment per column that actually holds data ----------
+    exps: list[Experiment] = []
+    for j, n, label in exp_cols:
+        e = Experiment(number=n, label=label)
+        for key, (i, lab, unit) in found.items():
+            v = _num(rows[i][j]) if j < len(rows[i]) else None
+            if v is None:
+                continue
+            if "psi" in unit.lower():
+                e.notes.append(f"{lab}: {v:g} PSI → {v * PSI_TO_BAR:.2f} bar")
+                v *= PSI_TO_BAR
+                unit = "bar"
+            # seawater feed / brine conductivity is tens of thousands of µS/cm; a value
+            # below 1000 can only be mS/cm (e.g. 56.5) whatever the unit cell says
+            if key in ("feed_ec", "brine_ec") and v < 1000:
+                e.notes.append(f"{lab}: {v:g} read as mS/cm → {v * 1000:g} µS/cm")
+                v *= 1000.0
+                unit = "µS/cm"
+            e.raw[key], e.units[key], e.labels[key] = v, unit, lab
+        if "feed_tds" not in e.raw and "feed_ec" in e.raw:
+            k = params.get("k_feed", 0.66)
+            e.raw["feed_tds"] = e.raw["feed_ec"] * k
+            e.units["feed_tds"], e.labels["feed_tds"] = "mg/L", "Feed salinity (from EC)"
+            e.notes.append(f"Feed TDS = EC × k = {e.raw['feed_ec']:g} × {k:g}")
+        # salinity rows are formulas in the sheet; if their cached values are
+        # missing, rebuild them from conductivity × k (same k as the sheet)
+        for tds_key, ec_key, k_key, k_def, lab in (
+                ("brine_tds", "brine_ec", "k_brine", 0.66, "Brine salinity (from EC)"),
+                ("permeate_tds", "perm_ec", "k_perm", 0.5, "Permeate salinity (from EC)")):
+            if tds_key not in e.raw and ec_key in e.raw:
+                k = params.get(k_key, k_def)
+                e.raw[tds_key] = e.raw[ec_key] * k
+                e.units[tds_key], e.labels[tds_key] = "mg/L", lab
+                e.notes.append(f"{lab} = EC × k = {e.raw[ec_key]:g} × {k:g}")
+        if e.valve_resistance is not None:
+            e.notes.append(f"Valve resistance K = P_b / Q_b² = {e.raw['brine_pressure']:.2f}"
+                           f" / {e.raw['brine_flow']:.2f}² = {e.valve_resistance:.3f}"
+                           " bar per (m³/h)²")
+        # an empty future column ("Exp 10" with nothing under it) is not an experiment
+        if e.frequency is not None and e.valve_resistance is not None:
+            exps.append(e)
+
+    if not exps:
+        raise WorkbookError("Experiment columns were found but none holds a frequency, "
+                            "a brine pressure and a brine flow.")
+    exps.sort(key=lambda e: e.number)
+    return Workbook(sheet=ws.title, experiments=exps, params=params)
 
 
-def sidebar() -> tuple[str, dict, dict]:
-    st.sidebar.header("Controls")
-    mode = st.sidebar.segmented_control(
-        "Simulation mode",
-        options=list(MODES.keys()),
-        default="Full system",
-    ) or "Full system"
-    st.sidebar.caption(MODES[mode]["note"])
-
-    if mode in ("Architecture", EXPERIMENTS_MODE):
-        return mode, {}, {}
-
-    keys = MODES[mode]["controls"]
-    controls: dict = {}
-
-    op_keys = [k for k in keys if k in OPERATING_CONTROLS]
-    wi_keys = [k for k in keys if k in WHATIF_CONTROLS]
-
-    if op_keys:
-        st.sidebar.divider()
-        st.sidebar.markdown("**Operating point**")
-        for key in op_keys:
-            controls[key] = _slider(key)
-            if key == "frequency":
-                from core import pump as _pump
-                st.sidebar.caption(f"≈ {_pump.rpm_from_frequency(controls[key]):.0f} rpm "
-                                   f"(rated max {_pump.v('rated_rpm'):.0f})")
-
-    if wi_keys:
-        st.sidebar.divider()
-        st.sidebar.markdown("**Condition — what-if**")
-        for key in wi_keys:
-            controls[key] = _slider(key)
-        st.sidebar.caption("100% is a healthy pump; lower it to simulate wear "
-                           "and watch the operating point drop off the curve.")
-
-    # Feed conditions are membrane / full-system inputs; shown openly, only
-    # where they are actually used. (The pump's suction lives with the pump.)
-    feed = {}
-    if mode in ("Membrane only", "Full system"):
-        st.sidebar.divider()
-        st.sidebar.markdown("**Feed conditions**")
-        # defaults = medians of the plant's own runs (13 runs, two campaigns)
-        feed = dict(
-            tds=st.sidebar.number_input("Feed TDS (mg/L)", value=37250, step=250),
-            temperature=st.sidebar.number_input("Feed temperature (°C)", value=29.0, step=0.5),
-            feed_flow=st.sidebar.number_input("Feed flow (m³/h)", value=14.1, step=0.1),
-        )
-        if mode == "Membrane only":
-            feed["membrane_age"] = st.sidebar.number_input(
-                "Membrane age (years)", min_value=0.0, max_value=20.0, value=5.0, step=0.5,
-                help="Age of the installed element, from the plant records. It sets the "
-                     "salt passage (CH9 Table 4); it is not a tuning knob.")
-        st.sidebar.caption("Defaults are the medians of the plant's own runs; replace them "
-                           "with your on-site readings.")
-
-    return mode, controls, feed
+# ---------------------------------------------------------------------------
+# 3. Lab results, as the quantities the simulation predicts
+# ---------------------------------------------------------------------------
+@dataclass
+class LabValue:
+    value: float | None
+    basis: str          # "measured" | "derived" | "workbook calc"
+    how: str = ""       # LaTeX of how the derived value was formed ("" if measured)
 
 
-def kpi_row(mode: str, result) -> None:
-    keys = MODES[mode]["kpis"]
-    cols = st.columns(len(keys))
-    for col, key in zip(cols, keys):
-        spec = KPIS[key]
-        value = PLACEHOLDER
-        if result is not None:
-            value = result.get(key, PLACEHOLDER)
-        col.metric(f"{spec['label']} ({spec['unit']})", value)
-
-
-def chart_slot(chart_key: str, result) -> None:
-    title, xlab, ylab = CHARTS[chart_key]
-    with st.container(border=True):
-        st.markdown(f"**{title}**")
-        if result is None:
-            st.caption(f"{ylab}  vs  {xlab}")
-            st.markdown(
-                "<div style='height:150px;display:flex;align-items:center;"
-                "justify-content:center;color:#7b8a8f;'>"
-                "No data yet — connect the model to populate this chart."
-                "</div>",
-                unsafe_allow_html=True,
-            )
-        else:
-            # When a model is connected it hands back plottable data and
-            # this branch draws it. Left empty until then.
-            st.line_chart(result["charts"][chart_key])
-
-
-def charts_section(mode: str, result) -> None:
-    chart_keys = MODES[mode]["charts"]
-    cols = st.columns(len(chart_keys))
-    for col, ckey in zip(cols, chart_keys):
-        with col:
-            chart_slot(ckey, result)
-
-
-# ---------------------------------------------------------------------
-# Page
-# ---------------------------------------------------------------------
-def main() -> None:
-    st.set_page_config(
-        page_title="SWRO Digital Twin — Rabigh Pilot",
-        page_icon="💧",
-        layout="wide",
-    )
-
-    st.title("SWRO Digital Twin — Rabigh Pilot Plant")
-    st.caption("Phase 1 · steady-state model of the pilot single-element "
-               "seawater RO skid · King Abdulaziz University — Water Research "
-               "Center, Rabigh.")
-
-    mode, controls, feed = sidebar()
-
-    # Architecture overview is its own page (no plant schematic needed).
-    if mode == "Architecture":
-        import architecture_page
-        architecture_page.render()
-        return
-
-    # Whole-plant schematic, with the current block highlighted.
-    import schematic
-    st.markdown(
-        f'<div style="max-width:720px;margin:0.25rem auto 0.5rem;">'
-        f'{schematic.system_svg(schematic.MODE_TO_BLOCK.get(mode, "all"))}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    # Built blocks get their own rich, fully-sourced page.
-    if mode == "Pump only":
-        import pump_page
-        pump_page.render(controls, feed)
-        return
-    if mode == "Membrane only":
-        import membrane_page
-        membrane_page.render(controls, feed)
-        return
-    if mode == "Valve only":
-        import valve_page
-        valve_page.render(controls, feed)
-        return
-    if mode == "Full system":
-        import system_page
-        system_page.render(controls, feed)
-        return
-    if mode == EXPERIMENTS_MODE:
-        import experiments_page
-        experiments_page.render(controls, feed)
-        return
-
-    # Unbuilt blocks still show the interface foundation (empty state).
-    st.info(
-        "Interface foundation. The controls on the left are live; the KPIs "
-        "and charts fill in once this block's model is connected. The pump and "
-        "membrane blocks are done — try those modes."
-    )
-    st.subheader("Key performance indicators")
-    kpi_row(mode, None)
-
-    st.subheader("Performance maps")
-    charts_section(mode, None)
-
-
-if __name__ == "__main__":
-    main()
+def lab_results(e: Experiment, area: float = MEMBRANE_AREA_DEFAULT) -> dict[str, LabValue]:
+    """Lab-side values keyed like the comparison rows. Derived values come only
+    from this experiment's own measurements; nothing from the model."""
+    g = e.raw.get
+    out: dict[str, LabValue] = {}
+    out["operating_pressure"] = LabValue(g("feed_pressure"), "measured")
+    out["brine_pressure"] = LabValue(g("brine_pressure"), "sets K")
+    qp, qb = g("permeate_flow"), g("brine_flow")
+    out["permeate_flow"] = LabValue(qp, "measured")
+    out["brine_flow"] = LabValue(qb, "measured")
+    if qp is not None and qb is not None:
+        qf = qp + qb
+        out["feed_flow"] = LabValue(qf, "derived",
+                                    rf"Q_f = Q_p + Q_b = {qp:.3f} + {qb:.3f} = {qf:.3f}\ \mathrm{{m^3/h}}")
+        out["recovery"] = LabValue(100 * qp / qf if qf else None, "derived",
+                                   rf"R = Q_p/(Q_p+Q_b) = {qp:.3f}/{qf:.3f} = {100 * qp / qf:.2f}\%")
+    else:
+        out["feed_flow"] = LabValue(None, "derived")
+        out["recovery"] = LabValue(None, "derived")
+    if qp is not None:
+        j = qp * 1000.0 / area
+        out["flux"] = LabValue(j, "derived",
+                               rf"J = Q_p\cdot 1000/A_e = {qp:.3f}\times 1000/{area:g} = {j:.2f}\ \mathrm{{LMH}}")
+    else:
+        out["flux"] = LabValue(None, "derived")
+    cp, cf = g("permeate_tds"), g("feed_tds")
+    out["permeate_tds"] = LabValue(cp, "measured")
+    out["brine_tds"] = LabValue(g("brine_tds"), "measured")
+    if cp is not None and cf:
+        rej = 100 * (1 - cp / cf)
+        out["rejection"] = LabValue(rej, "derived",
+                                    rf"\text{{rej}} = 1 - C_p/C_f = 1 - {cp:.1f}/{cf:.0f} = {rej:.2f}\%")
+    else:
+        out["rejection"] = LabValue(None, "derived")
+    out["power"] = LabValue(g("power"), "workbook")
+    out["sec"] = LabValue(g("sec"), "workbook calc")
+    out["beta"] = LabValue(g("beta"), "workbook calc")
+    return out
