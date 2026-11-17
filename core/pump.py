@@ -153,7 +153,7 @@ def leakage(outlet_bar: float) -> float:
 
 
 def nominal_flow(rpm: float, outlet_bar: float = 60.0) -> float:
-    """Delivered flow of a healthy pump:
+    """Delivered flow:
 
         Q = Q_theo(n) − Q_leak(p)
 
@@ -183,11 +183,10 @@ class PumpResult:
     rpm: float
     outlet_pressure: float
     inlet_pressure: float
-    health_factor: float          # 1.0 = healthy; < 1 simulates wear
 
     theoretical_flow: float
     nominal_flow: float
-    flow: float                   # delivered = nominal × health
+    flow: float                   # delivered flow (= nominal)
 
     shaft_power: float
     volumetric_efficiency: float  # delivered / theoretical
@@ -198,35 +197,35 @@ class PumpResult:
     worked: dict = field(default_factory=dict)   # LaTeX bodies, no $$
 
 
-def flow_worked(frequency_hz: float, outlet_pressure: float, health: float = 1.0) -> dict:
+def flow_worked(frequency_hz: float, outlet_pressure: float) -> dict:
     """LaTeX of the speed and delivered-flow laws with values substituted."""
     rpm = rpm_from_frequency(frequency_hz)
     q_theo = theoretical_flow(rpm)
     q_leak = leakage(outlet_pressure)
-    flow = (q_theo - q_leak) * health
+    flow = q_theo - q_leak
     return {
         "rpm": (rf"n = 30\,f\,\frac{{1480}}{{1500}} = 30\times {frequency_hz:.1f}\times 0.987"
                 rf" = {rpm:.0f}\ \mathrm{{rpm}}"),
         "leak": (rf"Q_{{leak}} = Q_{{leak,60}}\,\frac{{p}}{{60}} = {leakage_at_rated():.2f}"
                  rf"\times\frac{{{outlet_pressure:.1f}}}{{60}} = {q_leak:.2f}\ \mathrm{{m^3/h}}"),
-        "flow": (rf"Q = \left(D\,n - Q_{{leak}}\right) h = \left({v('displacement'):.0f}"
-                 rf"\times 10^{{-6}}\times {rpm:.0f}\times 60 - {q_leak:.2f}\right)\times {health:.2f}"
-                 rf" = ({q_theo:.2f} - {q_leak:.2f})\times {health:.2f} = {flow:.2f}\ \mathrm{{m^3/h}}"),
+        "flow": (rf"Q = D\,n - Q_{{leak}} = {v('displacement'):.0f}"
+                 rf"\times 10^{{-6}}\times {rpm:.0f}\times 60 - {q_leak:.2f}"
+                 rf" = {q_theo:.2f} - {q_leak:.2f} = {flow:.2f}\ \mathrm{{m^3/h}}"),
     }
 
 
 def simulate(frequency_hz: float, outlet_pressure: float,
-             health_factor: float = 1.0, inlet_pressure: float = 3.0) -> PumpResult:
+             inlet_pressure: float = 3.0) -> PumpResult:
     """Solve the pump block for one setting."""
     rpm = rpm_from_frequency(frequency_hz)
     q_theo = theoretical_flow(rpm)
     q_nom = nominal_flow(rpm, outlet_pressure)
-    flow = q_nom * health_factor
+    flow = q_nom
     power = shaft_power(flow, outlet_pressure)
     eta_v = (flow / q_theo) if q_theo else 0.0
     sec = (power / flow) if flow else math.inf
 
-    worked = flow_worked(frequency_hz, outlet_pressure, health_factor)
+    worked = flow_worked(frequency_hz, outlet_pressure)
     worked.update({
         "power": (rf"P = \frac{{16.7\,Q\,p_{{out}}}}{{k}}"
                   rf" = \frac{{16.7 \times {flow:.2f} \times {outlet_pressure:.1f}}}{{475}}"
@@ -239,7 +238,7 @@ def simulate(frequency_hz: float, outlet_pressure: float,
 
     result = PumpResult(
         frequency_hz=frequency_hz, rpm=rpm, outlet_pressure=outlet_pressure,
-        inlet_pressure=inlet_pressure, health_factor=health_factor,
+        inlet_pressure=inlet_pressure,
         theoretical_flow=q_theo, nominal_flow=q_nom, flow=flow,
         shaft_power=power, volumetric_efficiency=eta_v, specific_energy=sec,
         worked=worked,
@@ -282,16 +281,9 @@ def interpret(r: PumpResult, measured: dict | None = None) -> list[tuple[str, st
     msgs: list[tuple[str, str]] = []
 
     # --- what the model point itself means -----------------------------
-    if r.health_factor < 0.999:
-        gap = (1.0 - r.health_factor) * 100.0
-        msgs.append(("info",
-            f"Simulating wear: the model's delivered flow is {gap:.0f}% below the "
-            f"healthy Danfoss reference at {r.rpm:.0f} rpm. On the real pump, a gap "
-            f"like this would point to volumetric loss (internal slip or wear)."))
-    else:
-        msgs.append(("info",
-            "At 100% health the model sits on the Danfoss reference by construction. "
-            "Enter a measured field reading to compare the real pump against it."))
+    msgs.append(("info",
+        "The model point sits on the Danfoss reference by construction. Enter a "
+        "measured field reading to compare the real pump against it."))
 
     if not measured:
         return msgs
