@@ -1,4 +1,4 @@
-"""Full system - with Experiments.
+"""Simulation & Experiments Comparison.
 
 Replaces the old Validation page. One flow, top to bottom:
 
@@ -307,6 +307,77 @@ def _equation_section(eqs: dict, lab: dict) -> None:
             st.latex(lv.how)
 
 
+# NDP below which the runs so far show large permeate errors (+54 %, +73 %); an
+# observation from the data, used only to warn — never fed into the model.
+LOW_NDP_BAR = 10.0
+
+
+def _validity(e: X.Experiment, r, mr, lab) -> None:
+    """Flags that say, for THIS run, whether the comparison below can be trusted."""
+    p_star = mr.delta_pi + S.DP_GAUGES / 2.0          # feed pressure where NDP = 0
+    if mr.ndp <= 0 or r.permeate_flow <= 0:
+        st.error(
+            f"**Outside the model's range — no permeate predicted.** The solved feed pressure "
+            f"({r.operating_pressure:.1f} bar) is below the ≈ {p_star:.1f} bar needed to "
+            f"overcome the osmotic pressure (net driving pressure {mr.ndp:.1f} bar). This "
+            f"happens when the valve resistance is low (K = {e.valve_resistance:.3f}): the "
+            f"valve builds too little back-pressure. The real element still gave "
+            f"{lab['permeate_flow'].value or 0:.3f} m³/h, so permeate flow, flux, recovery, "
+            f"permeate TDS and rejection rows (−100 %) are not a meaningful comparison here.")
+    elif mr.ndp < LOW_NDP_BAR:
+        st.warning(
+            f"**Low driving pressure ({mr.ndp:.1f} bar).** The feed pressure is only "
+            f"{r.operating_pressure - p_star:.1f} bar above the ≈ {p_star:.1f} bar osmotic "
+            f"threshold, so a small error in pressure or salinity makes a large relative "
+            f"error in permeate flow and quality. In the runs so far, every run below about "
+            f"{LOW_NDP_BAR:.0f} bar showed permeate errors of +50 % or more.")
+    q_lab = lab["feed_flow"].value
+    q_geo = pump.theoretical_flow(pump.rpm_from_frequency(e.frequency))
+    if q_lab and q_lab > q_geo:
+        st.warning(
+            f"**Lab flows exceed the pump's capacity.** Permeate + brine = {q_lab:.2f} m³/h, "
+            f"but the pump's geometric flow at {e.frequency:.0f} Hz is {q_geo:.2f} m³/h "
+            f"(137 cm³/rev × {pump.rpm_from_frequency(e.frequency):.0f} rpm), and a "
+            f"positive-displacement pump cannot deliver more. A flow reading is likely off, "
+            f"so the flow-based rows of this run are suspect.")
+
+
+def _limitations() -> None:
+    st.markdown(
+        "- **Low valve resistance → no prediction.** When K is small the valve builds little "
+        "back-pressure, the feed pressure falls toward the osmotic pressure "
+        "(≈ 32 bar at ≈ 37,000 mg/L), and the model predicts no permeate while the real "
+        "element still makes a little. For the plant's typical feed (≈ 37,250 mg/L, 29 °C) "
+        "this happens below K ≈ 0.135 at 60 Hz and K ≈ 0.16 at 55 Hz (Exp 2 of the first "
+        "campaign: K = 0.106). Saltier or colder feed raises the threshold.\n"
+        "- **Near that threshold the errors are large** — Exp 3 and Exp 8 (net driving "
+        "pressure 5–8 bar) over-predict permeate by 50–75 %. The model is reliable only "
+        "well above the osmotic pressure.\n"
+        "- **K is taken from the same run.** The valve enters by its measured resistance, "
+        "so the brine-pressure row is not an independent test, and the feed-pressure "
+        "prediction leans on it. A true test of the valve law needs K from one run used to "
+        "predict another at a different frequency with the hand-wheel untouched.\n"
+        "- **Pump above its rated speed.** The plant runs at ≈ 1630–1780 rpm; the Danfoss "
+        "data stop at 1500 rpm, so the pump flow is an extrapolation, and the leakage term "
+        "is an assumption fixed by one rated point.\n"
+        "- **Fixed gauge loss.** ΔP = 4.48 bar is the median of the first campaign; the "
+        "measured value varies from run to run (3.5–8.6 bar), which shifts the predicted "
+        "pressure.\n"
+        "- **Membrane condition is assumed, not measured.** Salt permeability is aged "
+        "7 %/yr for the entered age (CH9 Table 4); the age is not yet confirmed, and the "
+        "permeate TDS is very sensitive to it. Water permeability is kept at catalogue.\n"
+        "- **Salinity from conductivity.** TDS = EC × k with fixed k (0.66 feed and brine, "
+        "0.50 permeate); errors in k pass straight into the osmotic pressure and the "
+        "permeate TDS.\n"
+        "- **Simplified membrane physics** (CH9): one lumped element, osmotic pressure by "
+        "the 0.8 bar / 1000 mg/L rule, polarisation reported but not added to the osmotic "
+        "pressure, steady state only.\n"
+        "- **Lab-side derived values.** Feed flow, recovery and flux on the lab side are "
+        "formed from the permeate and brine flow meters, so a flow-meter error appears in "
+        "all of them."
+    )
+
+
 def _full_steps(mr) -> None:
     titles = {"step1": "Step 1 — preliminary concentrations",
               "step2": "Step 2 — design flux → permeate flow",
@@ -331,7 +402,7 @@ def _full_steps(mr) -> None:
 # ---------------------------------------------------------------------------
 def render(controls: dict | None = None, feed: dict | None = None) -> None:
     st.markdown(CSS, unsafe_allow_html=True)
-    st.header("Full system — with experiments")
+    st.header("Simulation & experiments comparison")
     st.caption("Drive the full coupled plant with the settings and feed conditions of one "
                "lab experiment, then set the simulated results beside what the plant measured.")
 
@@ -393,6 +464,7 @@ def render(controls: dict | None = None, feed: dict | None = None) -> None:
 
     # 4 — comparison
     _step(4, "Lab vs simulation")
+    _validity(e, r, mr, lab)
     _comparison(sim, lab)
 
     # 5 — equations
@@ -401,3 +473,7 @@ def render(controls: dict | None = None, feed: dict | None = None) -> None:
     _equation_section(_equations(r, mr, vr, age), lab)
     st.markdown("")
     _full_steps(mr)
+
+    # 6 — limits
+    _step(6, "Limits of the simulation")
+    _limitations()
