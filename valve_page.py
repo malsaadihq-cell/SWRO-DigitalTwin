@@ -23,7 +23,8 @@ GRID = "#D7D1C4"
 SHADE = "#B4553A"
 RATING = V.ENVELOPE["max_pressure"][0]
 
-# Measured runs (brine flow m³/h, brine-gauge pressure bar) — Exp 1–9, all at 60 Hz
+# Measured runs (brine flow m³/h, brine-gauge pressure bar) — first campaign, Exp 1–9,
+# all at 60 Hz. Fixed here for the background dots; the experiments page reads any workbook.
 EXP_POINTS = [
     ("Exp 1", 13.00, 50.33), ("Exp 2", 18.00, 34.47), ("Exp 3", 14.00, 36.54),
     ("Exp 4", 13.75, 41.37), ("Exp 5", 13.25, 47.57), ("Exp 6", 12.50, 55.85),
@@ -177,6 +178,31 @@ def _curve_k(r):
     return _style(alt.layer(*layers), "Back-pressure vs K at this brine flow")
 
 
+def _chart_limits():
+    with st.expander("Limits of these charts", expanded=False):
+        st.markdown(
+            "- **The parabola P = K·Q² is the law, not a fitted curve.** It is untested: "
+            "every run so far is at a different hand-wheel position, so no two points share "
+            "one K. Holding the valve still while changing the VFD frequency would show "
+            "whether K stays constant.\n"
+            "- **The grey dots do not test the line.** Each dot is one run at its own K, "
+            "so it sits on its own parabola; their spread shows how far the operator moved "
+            "the hand-wheel, nothing more.\n"
+            "- **The dot at 18 m³/h (Exp 2) is suspect**: that brine flow is more than the "
+            "pump can deliver at 60 Hz (≈ 14.6 m³/h geometric), so a flow reading is "
+            "likely wrong.\n"
+            "- **K hides the valve physics.** Cv, trim shape and cavitation are inside one "
+            "measured number, so the chart cannot show the onset of cavitation or choked "
+            "flow, and the line far from the measured range (very low or very high flow) is "
+            "an extrapolation.\n"
+            "- **The back-pressure is the brine-gauge reading**, at the brine strainer, "
+            "taken to equal the pressure across the valve because the brine discharges to "
+            "about atmospheric pressure.\n"
+            "- **The Class 600 band (≈100 bar)** is the body rating at ambient temperature; "
+            "it is a mechanical limit, not a predicted operating point."
+        )
+
+
 def _interpretation(r, measured):
     st.markdown("**Reading the operating point**")
     render = {"ok": st.success, "warn": st.warning, "info": st.info}
@@ -223,14 +249,15 @@ def render(controls: dict, feed: dict) -> None:
     measured = _measured_inputs()
     st.markdown(
         "**Legend** — :blue[━ line] P = K·Q² at the current K  ·  :orange[● amber] current "
-        "point  ·  grey dots = Exp 1–9 (each at its own hand-wheel position)  ·  "
-        ":violet[◆ purple] your reading  ·  shaded = above the Class 600 rating"
+        "point  ·  grey dots = first campaign, Exp 1–9 at 60 Hz (each at its own hand-wheel "
+        "position)  ·  :violet[◆ purple] your reading  ·  shaded = above the Class 600 rating"
     )
     a1, a2 = st.columns(2)
     a1.altair_chart(_curve_q(r, measured), theme=None, width='stretch')
     a2.altair_chart(_curve_k(r), theme=None, width='stretch')
     st.caption("Close the valve → K rises → the back-pressure climbs for the same brine flow. "
                "A grey dot lies on the line only when K equals that run's own K.")
+    _chart_limits()
 
     st.divider()
     _interpretation(r, measured)
