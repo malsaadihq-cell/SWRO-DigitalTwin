@@ -338,12 +338,28 @@ def interpret(r: PumpResult, measured: dict | None = None) -> list[tuple[str, st
 # ---------------------------------------------------------------------
 # Reference curves for plotting (manufacturer lines to compare against)
 # ---------------------------------------------------------------------
-def flow_reference(points: int = 33, outlet_bar: float = 60.0) -> list[tuple[float, float]]:
-    """Delivered-flow line (p. 25) at a given outlet pressure: (rpm, flow)."""
-    lo, hi = v("min_rpm"), v("rated_rpm")
+def flow_reference(points: int = 33, outlet_bar: float = 60.0,
+                   hi_rpm: float | None = None) -> list[tuple[float, float]]:
+    """Delivered-flow line (p. 25) at a given outlet pressure: (rpm, flow).
+    From the minimum speed up to `hi_rpm` (default: the 1500 rpm maximum
+    continuous speed). Points above 1500 rpm are an extrapolation of the law —
+    the manual gives no data there."""
+    lo, hi = v("min_rpm"), (v("rated_rpm") if hi_rpm is None else hi_rpm)
     return [(lo + (hi - lo) * i / (points - 1),
              nominal_flow(lo + (hi - lo) * i / (points - 1), outlet_bar))
             for i in range(points)]
+
+
+def power_curve(rpm: float, points: int = 33) -> list[tuple[float, float]]:
+    """Power line (p. 26) at a fixed SPEED: (outlet pressure, shaft power), with the
+    delivered flow recomputed at each pressure (leakage grows with pressure), so
+    the line passes exactly through the model point."""
+    lo, hi = v("outlet_min"), v("outlet_max")
+    out = []
+    for i in range(points):
+        pr = lo + (hi - lo) * i / (points - 1)
+        out.append((pr, shaft_power(nominal_flow(rpm, pr), pr)))
+    return out
 
 
 def power_reference(flow_m3h: float, points: int = 33) -> list[tuple[float, float]]:
