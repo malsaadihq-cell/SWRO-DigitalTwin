@@ -230,17 +230,27 @@ def _curve_rejection(r, feed, measured):
         y=alt.Y("rejection:Q", title="Salt rejection (%)",
                 scale=alt.Scale(zero=False)))
     layers = _envelope(m.ENVELOPE["max_pressure"][0], dom) + [line]
-    layers.append(_dot(pd.DataFrame([{"pressure": r.feed_pressure, "rejection": r.rejection*100}]),
-                       "pressure", "rejection", MODEL, "circle",
-                       [alt.Tooltip("pressure:Q", format=".1f", title="model p_feed"),
-                        alt.Tooltip("rejection:Q", format=".2f", title="model rejection %")]))
+    if r.salt_passage != 1.0:   # the installed (aged) element, dashed amber
+        aged = [(pf, rj) for pf, rj in m.rejection_reference(
+            feed["tds"], feed["temperature"], feed["feed_flow"], r.salt_passage)
+            if rj is not None]
+        layers.append(alt.Chart(pd.DataFrame(aged, columns=["pressure", "rejection"]))
+                      .mark_line(color=MODEL, strokeWidth=2.5, strokeDash=[6, 4], clip=True)
+                      .encode(x="pressure:Q", y="rejection:Q"))
+    if r.flux > 0:   # no permeate → rejection is undefined, so no point is drawn
+        layers.append(_dot(pd.DataFrame([{"pressure": r.feed_pressure,
+                                          "rejection": r.rejection*100}]),
+                           "pressure", "rejection", MODEL, "circle",
+                           [alt.Tooltip("pressure:Q", format=".1f", title="model p_feed"),
+                            alt.Tooltip("rejection:Q", format=".2f",
+                                        title="installed element rejection %")]))
     if measured.get("feed_pressure") and measured.get("permeate_tds") and feed["tds"] > 0:
         rj = (1 - measured["permeate_tds"] / feed["tds"]) * 100.0
         layers.append(_dot(pd.DataFrame([{"pressure": measured["feed_pressure"], "rejection": rj}]),
                            "pressure", "rejection", MEASURED, "diamond",
                            [alt.Tooltip("pressure:Q", format=".1f", title="measured p_feed"),
                             alt.Tooltip("rejection:Q", format=".2f", title="measured rejection %")]))
-    return _style(alt.layer(*layers), "Salt rejection vs feed pressure  ·  IWA Ch. 9")
+    return _style(alt.layer(*layers), "Salt rejection vs feed pressure")
 
 
 def _curve_flux_vs_temp(r, feed):
@@ -272,6 +282,32 @@ def _curve_flux_vs_salinity(r, feed):
                [alt.Tooltip("tds:Q", format=",.0f", title="feed TDS"),
                 alt.Tooltip("flux:Q", format=".1f", title="flux")])
     return _style(alt.layer(line, dot), "Flux vs feed salinity")
+
+
+def _chart_limits():
+    with st.expander("Limits of these charts", expanded=False):
+        st.markdown(
+            "- **One input moves, the rest are held** at the sidebar values (feed TDS, "
+            "temperature, feed flow, membrane age). Each line is the model, not measured "
+            "data.\n"
+            "- **Feed pressure here is an input**, not the plant's: in the plant it is set "
+            "by the pump and the valve together (see the experiments page).\n"
+            "- **The flux line is the same for a new and an aged element**, because only the "
+            "salt permeability is aged. On the rejection chart the solid line is a new "
+            "element and the dashed line the installed one; the gap between them is the "
+            "assumed ageing (CH9 Table 4 rate × entered age) — not a measurement.\n"
+            "- **Near the osmotic pressure (≈ 30–32 bar at the plant's ≈ 37,000 mg/L) the "
+            "curves are steep**: a 1 bar error in pressure or osmotic pressure changes the "
+            "flux a lot and the rejection sharply. Below it the model gives no permeate "
+            "and the rejection line stops (flux < 2 LMH is not drawn).\n"
+            "- **Osmotic pressure uses the 0.8 bar per 1000 mg/L rule of thumb** (CH9 "
+            "p. 251) and polarisation (β) is not added to it, so at high flux the curves "
+            "slightly overstate flux and rejection.\n"
+            "- **One lumped element**: average feed-concentrate values are used; nothing is "
+            "resolved along the element.\n"
+            "- **Sensitivity charts** span 15–42 °C and 30,000–50,000 mg/L; the plant runs "
+            "near 29 °C and 37,000 mg/L, so their ends are extrapolations."
+        )
 
 
 def _interpretation(r, measured):
@@ -332,17 +368,23 @@ def render(controls: dict, feed: dict) -> None:
     measured = _measured_inputs()
     st.markdown(
         "**Legend** — :blue[━ line] new element (catalogue, ESS / IWA Ch. 9)  ·  "
-        ":orange[● amber] installed element (its age sets the salt passage)  ·  "
+        ":orange[╌ dashed / ● point] installed element (its age sets the salt passage)  ·  "
         ":violet[◆ purple] your measured reading  ·  shaded = above the element's max "
         "pressure"
     )
     a1, a2 = st.columns(2)
     a1.altair_chart(_curve_flux(r, feed, measured), theme=None, width='stretch')
     a2.altair_chart(_curve_rejection(r, feed, measured), theme=None, width='stretch')
+    if r.flux <= 0:
+        st.warning(f"No permeate at {r.feed_pressure:.1f} bar: the net driving pressure is "
+                   f"{r.ndp:.1f} bar (the feed pressure does not overcome the osmotic "
+                   f"pressure {r.delta_pi:.1f} bar). Flux, rejection and permeate quality are "
+                   f"not defined here, so no point is drawn on the rejection chart.")
     st.caption("Flux rises only once the feed pressure beats the osmotic pressure. Water "
                "permeability is not aged, so the amber point sits on the flux line; on the "
                "rejection chart the gap below the line is the ageing of the installed element.")
 
+    _chart_limits()
     st.markdown("**Sensitivity to the feed conditions you measure** — the amber dot is the "
                 "current point; these help you read and normalise field data.")
     b1, b2 = st.columns(2)
