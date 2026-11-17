@@ -19,13 +19,16 @@ the book derives from the element's standard test.
 
 Condition of the installed element
 ----------------------------------
-simulate() describes a NEW element by default (catalogue Kw and Ks), so the
-block stays a clean reference. The installed element is 5 years old and comes
-from a test rig for end-of-life elements, so the full-system model passes a
-salt-passage factor (see plant_salt_passage()): Ks is derived with the CH9
-Step-3 method at the ESS MINIMUM rejection (99.7 %), then aged with the
-Hydranautics salt-passage increase from CH9 Table 4. Nothing is fitted to the
-plant data.
+The plant tests end-of-life elements, so the installed element changes and its
+AGE is an input (from the plant records, never adjusted to match results).
+Age acts on the salt permeability only (see salt_passage_for_age()): Ks is
+derived with the CH9 Step-3 method at the ESS MINIMUM rejection (99.7 %), then
+aged with the Hydranautics salt-passage increase from CH9 Table 4 (7 %/yr,
+surface intake). The water permeability Kw stays at the catalogue value:
+chemical cleaning restores water permeability, whereas the salt-passage
+increase from polymer degradation is not recovered — and the measured runs
+show Kw close to catalogue. simulate() with salt_passage = 1.0 is a NEW
+element (catalogue Ks), used as the reference line on the membrane page.
 """
 from __future__ import annotations
 
@@ -63,7 +66,8 @@ PARAMS: dict[str, Spec] = {
                    "CH9 uses for constant-rejection permeate quality)",
                    ESS + "; " + CH9 + ", Fig. 3 p. 247 and §9.3.6.1 p. 259"),
     "age": Spec(5.0, "years",
-                "Service age of the installed element — to be confirmed", PLANT),
+                "Default age of the installed element, used when a run does not give "
+                "one — to be confirmed from the plant records", PLANT),
     "sp_increase": Spec(0.07, "per year",
                         "Salt-passage increase per year of service, Hydranautics, sea water, "
                         "surface intake. The 10 %/yr column is for well intake with MF/UF "
@@ -193,7 +197,7 @@ def ks25_at_rejection(sr: float) -> float:
     return Jws * Cfcs * (1 - sr) / Cfcs
 
 
-def plant_salt_passage() -> dict:
+def plant_salt_passage(age: float | None = None) -> dict:
     """Salt-passage factor of the INSTALLED element relative to the catalogue Ks:
 
         Ks,new,min = Ks(SR_min = 99.7 %)              (ESS minimum, CH9 Step 3)
@@ -201,25 +205,31 @@ def plant_salt_passage() -> dict:
                                                         surface intake)
         factor     = Ks,plant / Ks25
 
-    No plant measurement is used — the factor comes from the ESS, CH9 and the
-    element age only.
+    `age` is the installed element's age in years (from the plant records);
+    None uses the default PARAMS["age"]. No result is used to set it.
     """
+    age = p("age") if age is None else age
     ks_min = ks25_at_rejection(p("SR_min"))
-    growth = (1.0 + p("sp_increase")) ** p("age")
+    growth = (1.0 + p("sp_increase")) ** age
     ks_plant = ks_min * growth
     factor = ks_plant / KS25
     worked = {
         "ksmin": (rf"K_{{s,min}} = K_s(SR_{{min}}={p('SR_min')*100:.1f}\%) = {ks_min:.4f}"
                   rf"\ \mathrm{{L/m^2 h}}"),
-        "ksplant": (rf"K_{{s,plant}} = K_{{s,min}}\,(1+{p('sp_increase'):.2f})^{{{p('age'):.0f}}}"
+        "ksplant": (rf"K_{{s,plant}} = K_{{s,min}}\,(1+{p('sp_increase'):.2f})^{{{age:g}}}"
                     rf" = {ks_min:.4f}\times {growth:.3f} = {ks_plant:.4f}\ \mathrm{{L/m^2 h}}"),
         "factor": (rf"f_{{sp}} = K_{{s,plant}}/K_{{s,25}} = {ks_plant:.4f}/{KS25:.4f}"
                    rf" = {factor:.2f}"),
     }
-    return dict(ks_min=ks_min, ks_plant=ks_plant, factor=factor, worked=worked)
+    return dict(ks_min=ks_min, ks_plant=ks_plant, factor=factor, age=age, worked=worked)
 
 
-PLANT_SALT_PASSAGE = plant_salt_passage()["factor"]
+def salt_passage_for_age(age: float | None = None) -> float:
+    """Ks multiplier of an element of this age (see plant_salt_passage())."""
+    return plant_salt_passage(age)["factor"]
+
+
+PLANT_SALT_PASSAGE = plant_salt_passage()["factor"]   # at the default age
 
 
 # --- operating envelope (all from the ESS) ---------------------------
@@ -251,10 +261,9 @@ def brine_conc(feed_tds: float, recovery: float) -> float:
     return feed_tds * (1.0 - recovery * (1.0 - sr)) / (1.0 - recovery)
 
 
-def kw_at(temperature: float, fouling: float) -> float:
-    """Water permeability at temperature, with a fouling multiplier
-    (1.0 = clean): Kw(T) = Kw25 · fouling · 1.03^(T−25)  (CH9 p. 252)."""
-    return KW25 * fouling * p("temp_coeff") ** (temperature - 25.0)
+def kw_at(temperature: float) -> float:
+    """Water permeability at temperature: Kw(T) = Kw25 · 1.03^(T−25)  (CH9 p. 252)."""
+    return KW25 * p("temp_coeff") ** (temperature - 25.0)
 
 
 def ks_at(temperature: float, salt_passage: float = 1.0) -> float:
@@ -267,10 +276,10 @@ def ks_at(temperature: float, salt_passage: float = 1.0) -> float:
 # CH9 Steps 4–7 (Steps 1–3 are above, before KW25/KS25 are fixed)
 # ---------------------------------------------------------------------
 def step4_feed_pressure(javg: float, feed_tds: float, recovery: float,
-                        temperature: float = 25.0, fouling: float = 1.0) -> dict:
+                        temperature: float = 25.0) -> dict:
     """Step 4 — preliminary feed pressure for the chosen flux (CH9 p. 253–254):
 
-        NDP   = Javg / Kw(T, fouling)
+        NDP   = Javg / Kw(T)
         Cc    = Cf · [1 − R·(1−SR)] / (1 − R)
         πf    = Cf · 0.8/1000,   πc = Cc · 0.8/1000
         πfc   = (πf + πc)/2,     πp = 0.01 · πfc
@@ -278,7 +287,7 @@ def step4_feed_pressure(javg: float, feed_tds: float, recovery: float,
         ΔpPV  = ΔPe · 1                 (single element)
         Pfeed = NDP + ΔpPV/2 + Δπ + Pp
     """
-    Kw = kw_at(temperature, fouling)
+    Kw = kw_at(temperature)
     dPe, Pp, ppf = p("dPe"), p("Pp"), p("pp_factor")
     ndp = javg / Kw if Kw > 0 else math.inf
     Cc = brine_conc(feed_tds, recovery)
@@ -306,7 +315,7 @@ def step4_feed_pressure(javg: float, feed_tds: float, recovery: float,
 
 
 def step5_flows_recovery_beta(feed_pressure: float, feed_tds: float, temperature: float,
-                              feed_flow: float, fouling: float = 1.0) -> dict:
+                              feed_flow: float) -> dict:
     """Step 5 — flows, recovery and concentration polarisation (CH9 p. 254–258).
 
     Recovery is unknown because the brine concentration — and therefore
@@ -320,7 +329,7 @@ def step5_flows_recovery_beta(feed_pressure: float, feed_tds: float, temperature
     Cc = Cf·[1 − R(1−SR)]/(1 − R) (CH9 p. 251, as in Step 1/4), not with
     Cc1 = Cf1/(1 − Re1). The SR form is what simulate() has always used.
     """
-    Kw = kw_at(temperature, fouling)
+    Kw = kw_at(temperature)
     A = p("area")
     dPe = p("dPe")
     Pp = p("Pp")
@@ -362,8 +371,8 @@ def step5_flows_recovery_beta(feed_pressure: float, feed_tds: float, temperature
     ratio = (Qc / Qp) if Qp > 0 else math.inf
 
     worked = {
-        "kwT": (rf"K_w(T) = K_{{w,25}}\cdot 1.03^{{T-25}}\cdot h = {KW25:.3f}\cdot 1.03^{{{temperature:.0f}-25}}"
-                rf"\cdot {fouling:.2f} = {Kw:.3f}\ \mathrm{{L/m^2\,bar\,h}}"),
+        "kwT": (rf"K_w(T) = K_{{w,25}}\cdot 1.03^{{T-25}} = {KW25:.3f}\cdot 1.03^{{{temperature:.0f}-25}}"
+                rf" = {Kw:.3f}\ \mathrm{{L/m^2\,bar\,h}}"),
         "cc": (rf"C_c = C_f\,\frac{{1-R(1-SR)}}{{1-R}} = {feed_tds:.0f}\,"
                rf"\frac{{1-{recovery:.3f}(1-0.998)}}{{1-{recovery:.3f}}} = {Cc:.0f}\ \mathrm{{mg/L}}"),
         "ndp": (rf"NDP = P_f - \tfrac{{\Delta P_e}}{{2}} - \Delta\pi - P_p"
@@ -452,7 +461,6 @@ class MembraneResult:
     feed_tds: float
     temperature: float
     feed_flow: float
-    fouling: float
 
     permeate_flow: float      # Qp [m³/h]
     flux: float               # J  [L/m²·h]
@@ -482,8 +490,7 @@ class MembraneResult:
 
 
 def simulate(feed_pressure: float, feed_tds: float, temperature: float,
-             feed_flow: float, fouling: float = 1.0,
-             salt_passage: float = 1.0) -> MembraneResult:
+             feed_flow: float, salt_passage: float = 1.0) -> MembraneResult:
     """Solve the single element at a given feed pressure (CH9 element-1
     procedure): Step 5 (iteration) → Step 6 (permeate quality) → Step 7
     (cross-flow velocity).
@@ -492,10 +499,10 @@ def simulate(feed_pressure: float, feed_tds: float, temperature: float,
     are evaluated at the solved flux and recovery only so their worked
     substitutions can be shown — they do not feed back into the result.
 
-    fouling multiplies Kw and salt_passage multiplies Ks; both default to 1.0,
-    a new element. The full-system model passes PLANT_SALT_PASSAGE.
+    salt_passage multiplies Ks; 1.0 is a new element. The system model passes
+    the factor for the installed element's age (salt_passage_for_age()).
     """
-    s5 = step5_flows_recovery_beta(feed_pressure, feed_tds, temperature, feed_flow, fouling)
+    s5 = step5_flows_recovery_beta(feed_pressure, feed_tds, temperature, feed_flow)
     s6 = step6_permeate_quality(s5["Cfc"], s5["J"], temperature, feed_tds, salt_passage)
     s7 = step7_crossflow_velocity(feed_flow, s5["Qc"])
 
@@ -504,7 +511,7 @@ def simulate(feed_pressure: float, feed_tds: float, temperature: float,
         "step1": step1_preliminary_concentrations(feed_tds, R_design)["worked"],
         "step2": step2_flux_and_flow(s5["J"])["worked"],
         "step3": _DERIV["worked"],
-        "step4": step4_feed_pressure(s5["J"], feed_tds, R_design, temperature, fouling)["worked"],
+        "step4": step4_feed_pressure(s5["J"], feed_tds, R_design, temperature)["worked"],
         "step5": s5["worked"],
         "step6": s6["worked"],
         "step7": s7["worked"],
@@ -526,7 +533,7 @@ def simulate(feed_pressure: float, feed_tds: float, temperature: float,
 
     result = MembraneResult(
         feed_pressure=feed_pressure, feed_tds=feed_tds, temperature=temperature,
-        feed_flow=feed_flow, fouling=fouling, permeate_flow=Qp, flux=J,
+        feed_flow=feed_flow, permeate_flow=Qp, flux=J,
         permeate_tds=Cp, rejection=rejection, recovery=s5["Re"], ndp=s5["NDP"],
         delta_pi=s5["dpi"], brine_tds=s5["Cc"], brine_flow=Qc, cfc=s5["Cfc"],
         beta=s5["beta"], element_dp=p("dPe"), kw_T=s5["Kw"], ks_T=s6["Ks"],
@@ -582,16 +589,15 @@ REJ_TOL = 0.3  # percentage points
 
 def interpret(r: MembraneResult, measured: dict | None = None) -> list[tuple[str, str]]:
     msgs: list[tuple[str, str]] = []
-    if r.fouling < 0.999:
-        gap = (1.0 - r.fouling) * 100.0
+    if r.salt_passage != 1.0:
         msgs.append(("info",
-            f"Simulating fouling: the water permeability is set {gap:.0f}% below the "
-            f"clean-element value, so the flux drops by about the same amount. On the "
-            f"real element, a gap like this means scaling or fouling."))
+            f"The model is the installed element: catalogue water permeability, salt "
+            f"permeability × {r.salt_passage:.2f} for its age (CH9 Table 4). The line on "
+            f"the charts is a new element. Enter a measured reading to compare."))
     else:
         msgs.append(("info",
-            "At 100% condition the model uses the catalogue permeability. Enter a measured "
-            "reading to compare the real element against it."))
+            "The model is a new element (catalogue Kw and Ks). Enter a measured reading "
+            "to compare the real element against it."))
 
     if not measured:
         return msgs
@@ -600,7 +606,7 @@ def interpret(r: MembraneResult, measured: dict | None = None) -> list[tuple[str
     qp = measured.get("permeate_flow")
     tm = measured.get("temperature", r.temperature)
     if pf and qp:
-        clean = simulate(pf, r.feed_tds, tm, r.feed_flow, fouling=1.0)
+        clean = simulate(pf, r.feed_tds, tm, r.feed_flow)
         J_meas = qp * 1000.0 / p("area")
         gap = (J_meas - clean.flux) / clean.flux * 100.0 if clean.flux else 0.0
         if abs(gap) <= FLUX_TOL:
@@ -636,42 +642,42 @@ def interpret(r: MembraneResult, measured: dict | None = None) -> list[tuple[str
 # ---------------------------------------------------------------------
 # Reference curves for plotting
 # ---------------------------------------------------------------------
-def flux_reference(feed_tds, temperature, feed_flow, fouling=1.0,
+def flux_reference(feed_tds, temperature, feed_flow,
                    lo=30.0, hi=85.0, points=34):
     out = []
     for i in range(points):
         pf = lo + (hi - lo) * i / (points - 1)
-        out.append((pf, simulate(pf, feed_tds, temperature, feed_flow, fouling).flux))
+        out.append((pf, simulate(pf, feed_tds, temperature, feed_flow).flux))
     return out
 
 
-def rejection_reference(feed_tds, temperature, feed_flow, fouling=1.0,
+def rejection_reference(feed_tds, temperature, feed_flow, salt_passage=1.0,
                         lo=30.0, hi=85.0, points=34):
     out = []
     for i in range(points):
         pf = lo + (hi - lo) * i / (points - 1)
-        r = simulate(pf, feed_tds, temperature, feed_flow, fouling)
+        r = simulate(pf, feed_tds, temperature, feed_flow, salt_passage)
         out.append((pf, r.rejection * 100.0 if r.flux > 2.0 else None))
     return out
 
 
-def flux_vs_temperature(feed_pressure, feed_tds, feed_flow, fouling=1.0,
+def flux_vs_temperature(feed_pressure, feed_tds, feed_flow,
                         lo=15.0, hi=42.0, points=28):
     """Flux sensitivity to feed temperature at the current pressure — the main
     confounder when reading field data (about 3 % per °C)."""
     out = []
     for i in range(points):
         T = lo + (hi - lo) * i / (points - 1)
-        out.append((T, simulate(feed_pressure, feed_tds, T, feed_flow, fouling).flux))
+        out.append((T, simulate(feed_pressure, feed_tds, T, feed_flow).flux))
     return out
 
 
-def flux_vs_salinity(feed_pressure, temperature, feed_flow, fouling=1.0,
+def flux_vs_salinity(feed_pressure, temperature, feed_flow,
                      lo=30000.0, hi=50000.0, points=28):
     """Flux sensitivity to feed salinity at the current pressure — Red Sea feed
     TDS changes with season/intake."""
     out = []
     for i in range(points):
         Cf = lo + (hi - lo) * i / (points - 1)
-        out.append((Cf, simulate(feed_pressure, Cf, temperature, feed_flow, fouling).flux))
+        out.append((Cf, simulate(feed_pressure, Cf, temperature, feed_flow).flux))
     return out
